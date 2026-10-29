@@ -68,8 +68,14 @@ fn fmt_age(started_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// Replace every control character (escape sequences, CR, tabs, newlines...)
+/// with a space so untrusted text cannot drive the terminal.
+fn sanitize(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 fn truncate(s: &str, max: usize) -> String {
-    let s = s.replace('\n', " ");
+    let s = sanitize(s);
     if s.chars().count() <= max {
         s
     } else {
@@ -100,11 +106,11 @@ fn render(result: &ScanResult, all: bool, now_ms: i64) -> String {
             let project = a.entry.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("");
             [
                 a.status.label().to_string(),
-                a.entry.name.clone(),
+                sanitize(&a.entry.name),
                 truncate(&a.title, 50),
-                project.to_string(),
-                a.summary.git_branch.clone().unwrap_or_else(|| "-".into()),
-                a.entry.kind.clone(),
+                sanitize(project),
+                sanitize(a.summary.git_branch.as_deref().unwrap_or("-")),
+                sanitize(&a.entry.kind),
                 fmt_age(a.entry.started_at_ms, now_ms),
                 fmt_tokens(a.summary.tokens.total()),
             ]
@@ -134,7 +140,7 @@ fn render(result: &ScanResult, all: bool, now_ms: i64) -> String {
             out.push_str(&format!(
                 "  └ {} {}: {}\n",
                 sub_label(s.status),
-                s.agent_type,
+                sanitize(&s.agent_type),
                 truncate(&s.description, 80)
             ));
         }
@@ -152,9 +158,12 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::List { json, all, claude_dir } => {
             let dir = resolve_dir(claude_dir)?;
-            let result = do_scan(&dir);
+            let mut result = do_scan(&dir);
             print_warnings(&result);
             if json {
+                if !all {
+                    result.agents.retain(|a| a.status != AgentStatus::Exited);
+                }
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 print!("{}", render(&result, all, Utc::now().timestamp_millis()));

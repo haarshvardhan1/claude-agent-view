@@ -43,6 +43,8 @@ fn missing_proc_start_alive_if_running() {
     assert!(!is_alive(&e, &FakeProbe(HashMap::new())));
 }
 
+// Only detects the TZ bug on hosts whose local zone is not UTC; on a UTC host
+// it passes either way.
 #[test]
 fn system_probe_reports_utc() {
     let s = SystemProbe.proc_start(std::process::id()).expect("own pid is running");

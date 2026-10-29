@@ -46,3 +46,38 @@ fn subagent_line_is_indented() {
     assert!(line.contains("look around"));
     assert!(line.contains("Explore"));
 }
+
+fn av_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::cargo_bin("av")
+        .unwrap()
+        .args(args)
+        .arg("--claude-dir")
+        .arg(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn control_chars_are_stripped_from_output() {
+    let dir = tempfile::tempdir().unwrap();
+    common::fixture_home(dir.path());
+    let t = dir.path().join("projects/-tmp-myproj").join(format!("{}.jsonl", common::SESSION));
+    let title = serde_json::json!({
+        "type": "ai-title", "aiTitle": "\x1b]52;c;ZXZpbA==\x07evil\r\ttitle", "sessionId": common::SESSION,
+    });
+    std::fs::write(&t, format!("{title}\n")).unwrap();
+    let out = av_in(dir.path(), &["list", "--all"]);
+    assert!(out.contains("evil"));
+    for c in ['\x1b', '\x07', '\r'] {
+        assert!(!out.contains(c), "output contains {c:?}");
+    }
+}
+
+#[test]
+fn json_hides_exited_by_default() {
+    let out = av(&["list", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["agents"].as_array().unwrap().len(), 0);
+}
