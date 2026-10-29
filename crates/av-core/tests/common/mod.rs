@@ -34,3 +34,24 @@ pub fn write_session_at(
     });
     fs::write(dir.join(format!("{pid}.json")), body.to_string()).unwrap();
 }
+
+use av_core::liveness::ProcessProbe;
+use av_core::registry::SessionEntry;
+use std::collections::HashMap;
+
+pub struct FakeProbe(pub HashMap<u32, String>);
+
+impl ProcessProbe for FakeProbe {
+    fn proc_start(&self, pid: u32) -> Option<String> {
+        self.0.get(&pid).cloned()
+    }
+}
+
+pub fn entry(pid: u32, proc_start: Option<&str>) -> SessionEntry {
+    serde_json::from_value(serde_json::json!({
+        "pid": pid,
+        "sessionId": "s",
+        "procStart": proc_start,
+    }))
+    .unwrap()
+}
