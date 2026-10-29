@@ -35,3 +35,10 @@ fn padded_day_matches() {
 fn system_probe_sees_own_process() {
     assert!(SystemProbe.proc_start(std::process::id()).is_some());
 }
+
+#[test]
+fn missing_proc_start_alive_if_running() {
+    let e = entry(42, None);
+    assert!(is_alive(&e, &probe(42, "Thu Oct 29 12:36:53 2026")));
+    assert!(!is_alive(&e, &FakeProbe(HashMap::new())));
+}

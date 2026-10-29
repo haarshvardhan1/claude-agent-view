@@ -14,6 +14,7 @@ impl ProcessProbe for SystemProbe {
     fn proc_start(&self, pid: u32) -> Option<String> {
         let out = Command::new("ps")
             .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .env("LC_ALL", "C")
             .output()
             .ok()?;
         if !out.status.success() {
@@ -28,6 +29,7 @@ fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Alive iff the pid is running and, when the entry records `proc_start`, it matches; with no recorded `proc_start`, a running pid counts as alive.
 pub fn is_alive(entry: &SessionEntry, probe: &dyn ProcessProbe) -> bool {
     match probe.proc_start(entry.pid) {
         None => false,
