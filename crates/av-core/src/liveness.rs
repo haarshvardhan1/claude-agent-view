@@ -15,6 +15,7 @@ impl ProcessProbe for SystemProbe {
         let out = Command::new("ps")
             .args(["-o", "lstart=", "-p", &pid.to_string()])
             .env("LC_ALL", "C")
+            .env("TZ", "UTC")
             .output()
             .ok()?;
         if !out.status.success() {
@@ -29,6 +30,7 @@ fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Registry `procStart` is recorded in UTC, so `ps` is run with TZ=UTC.
 /// Alive iff the pid is running and, when the entry records `proc_start`, it matches; with no recorded `proc_start`, a running pid counts as alive.
 pub fn is_alive(entry: &SessionEntry, probe: &dyn ProcessProbe) -> bool {
     match probe.proc_start(entry.pid) {

@@ -42,3 +42,12 @@ fn missing_proc_start_alive_if_running() {
     assert!(is_alive(&e, &probe(42, "Thu Oct 29 12:36:53 2026")));
     assert!(!is_alive(&e, &FakeProbe(HashMap::new())));
 }
+
+#[test]
+fn system_probe_reports_utc() {
+    let s = SystemProbe.proc_start(std::process::id()).expect("own pid is running");
+    let norm = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = chrono::NaiveDateTime::parse_from_str(&norm, "%a %b %e %H:%M:%S %Y").unwrap();
+    let diff = (chrono::Utc::now().naive_utc() - t).num_seconds().abs();
+    assert!(diff < 600, "proc start {norm} is {diff}s from now; not UTC?");
+}
