@@ -143,3 +143,15 @@ pub fn assistant_api_error(ts: &str) -> String {
     })
     .to_string()
 }
+
+// ---- subagent fixtures ----
+
+/// Write `<transcript sans .jsonl>/subagents/agent-<id>.jsonl` (+ optional meta).
+pub fn write_subagent(transcript: &Path, id: &str, lines: &[String], meta: Option<&str>) {
+    let dir = av_core::paths::subagents_dir(transcript);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("agent-{id}.jsonl")), lines.join("\n") + "\n").unwrap();
+    if let Some(m) = meta {
+        fs::write(dir.join(format!("agent-{id}.meta.json")), m).unwrap();
+    }
+}
