@@ -55,3 +55,91 @@ pub fn entry(pid: u32, proc_start: Option<&str>) -> SessionEntry {
     }))
     .unwrap()
 }
+
+// ---- transcript line builders ----
+
+pub const T0: &str = "2026-10-29T13:39:54.792Z";
+
+pub fn user_prompt(text: &str, ts: &str) -> String {
+    serde_json::json!({
+        "type": "user", "isSidechain": false, "timestamp": ts,
+        "message": {"role": "user", "content": text},
+        "gitBranch": "main", "sessionId": "s", "version": "2.1.312",
+    })
+    .to_string()
+}
+
+pub fn user_meta(text: &str, ts: &str) -> String {
+    serde_json::json!({
+        "type": "user", "isMeta": true, "timestamp": ts,
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    })
+    .to_string()
+}
+
+pub fn ai_title(text: &str) -> String {
+    serde_json::json!({"type": "ai-title", "aiTitle": text, "sessionId": "s"}).to_string()
+}
+
+fn usage(i: u64, o: u64) -> serde_json::Value {
+    serde_json::json!({
+        "input_tokens": i, "output_tokens": o,
+        "cache_creation_input_tokens": 3, "cache_read_input_tokens": 7,
+    })
+}
+
+pub fn assistant_tool_use(msg_id: &str, tool_id: &str, name: &str, ts: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "timestamp": ts, "gitBranch": "main",
+        "message": {
+            "id": msg_id, "model": "claude-opus-5-5", "role": "assistant",
+            "content": [{"type": "tool_use", "id": tool_id, "name": name, "input": {}}],
+            "stop_reason": "tool_use", "usage": usage(1, 1),
+        },
+    })
+    .to_string()
+}
+
+pub fn assistant_text(msg_id: &str, stop_reason: &str, i: u64, o: u64, ts: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "timestamp": ts, "gitBranch": "main",
+        "message": {
+            "id": msg_id, "model": "claude-opus-5-5", "role": "assistant",
+            "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": stop_reason, "usage": usage(i, o),
+        },
+    })
+    .to_string()
+}
+
+pub fn tool_result(tool_id: &str, ts: &str) -> String {
+    serde_json::json!({
+        "type": "user", "timestamp": ts,
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tool_id, "content": "ok", "is_error": false}
+        ]},
+    })
+    .to_string()
+}
+
+pub fn system_error(ts: &str) -> String {
+    serde_json::json!({
+        "type": "system", "subtype": "api_error", "level": "error",
+        "content": "boom", "timestamp": ts,
+    })
+    .to_string()
+}
+
+pub fn assistant_api_error(ts: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "isApiErrorMessage": true, "error": "authentication_failed",
+        "timestamp": ts,
+        "message": {
+            "id": "synthetic", "model": "<synthetic>", "role": "assistant",
+            "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
+    .to_string()
+}
