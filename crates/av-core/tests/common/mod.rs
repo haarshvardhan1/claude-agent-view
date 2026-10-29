@@ -130,6 +130,14 @@ pub fn system_error(ts: &str) -> String {
     .to_string()
 }
 
+pub fn system_turn_duration(ts: &str) -> String {
+    serde_json::json!({
+        "type": "system", "subtype": "turn_duration", "durationMs": 1000,
+        "messageCount": 2, "timestamp": ts,
+    })
+    .to_string()
+}
+
 pub fn assistant_api_error(ts: &str) -> String {
     serde_json::json!({
         "type": "assistant", "isApiErrorMessage": true, "error": "authentication_failed",

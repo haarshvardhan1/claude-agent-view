@@ -62,9 +62,10 @@ fn user_text(msg: &Value) -> Option<&str> {
     }
 }
 
-fn title_from(text: &str) -> String {
-    let first = text.lines().next().unwrap_or("").trim();
-    first.chars().take(TITLE_MAX_CHARS).collect()
+/// First line of a prompt as a title; None if there is no usable text.
+fn title_from(text: &str) -> Option<String> {
+    let first = text.trim_start().lines().next().unwrap_or("").trim();
+    (!first.is_empty()).then(|| first.chars().take(TITLE_MAX_CHARS).collect())
 }
 
 fn usage_totals(u: &Value) -> TokenTotals {
@@ -125,11 +126,20 @@ pub fn summarize_transcript(path: &Path) -> std::io::Result<TranscriptSummary> {
         }
 
         let msg = rec.get("message");
-        s.last_is_error = match rtype {
-            "system" => rec.get("level").and_then(Value::as_str) == Some("error"),
-            "assistant" => rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true),
-            _ => false,
-        };
+        // System records other than level=error (e.g. the turn_duration record
+        // written after every turn) leave the flag unchanged.
+        match rtype {
+            "system" => {
+                if rec.get("level").and_then(Value::as_str) == Some("error") {
+                    s.last_is_error = true;
+                }
+            }
+            "assistant" => {
+                s.last_is_error =
+                    rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+            }
+            _ => s.last_is_error = false,
+        }
 
         match rtype {
             "assistant" => {
@@ -187,12 +197,12 @@ pub fn summarize_transcript(path: &Path) -> std::io::Result<TranscriptSummary> {
                     continue;
                 }
                 if let Some(text) = user_text(msg) {
-                    if text.starts_with('<') {
+                    if text.trim_start().starts_with('<') {
                         continue;
                     }
                     open.clear();
                     if first_prompt.is_none() {
-                        first_prompt = Some(title_from(text));
+                        first_prompt = title_from(text);
                     }
                 }
             }

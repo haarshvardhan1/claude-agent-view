@@ -108,7 +108,7 @@ fn invalid_utf8_line_does_not_abort() {
     bytes.push(b'\n');
     bytes.extend_from_slice(b"\xff\xfe\n");
     bytes.extend_from_slice(assistant_text("m1", "end_turn", 1, 1, T0).as_bytes());
-    let _ = fs::write(&p, bytes);
+    fs::write(&p, bytes).unwrap();
     let s = summarize_transcript(&p).unwrap();
     assert_eq!(s.skipped_lines, 1);
     assert_eq!(s.title.as_deref(), Some("T"));
@@ -141,6 +141,22 @@ fn error_followed_by_normal_record_is_not_error() {
     assert!(!s.last_is_error);
     let s = run(&[assistant_api_error(T0), assistant_text("m1", "end_turn", 1, 1, T0)]);
     assert!(!s.last_is_error);
+}
+
+#[test]
+fn api_error_then_turn_duration_is_error() {
+    let s = run(&[assistant_api_error(T0), system_turn_duration(T0)]);
+    assert!(s.last_is_error);
+}
+
+#[test]
+fn title_skips_blank_and_indented_system_prompts() {
+    let s = run(&[
+        user_prompt("\n  \n", T0),
+        user_prompt("  <system-reminder>x", T0),
+        user_prompt("add dark mode", T0),
+    ]);
+    assert_eq!(s.title.as_deref(), Some("add dark mode"));
 }
 
 #[test]

@@ -34,6 +34,18 @@ fn live_session_full_picture() {
 }
 
 #[test]
+fn api_error_then_turn_duration_is_error_status() {
+    let d = tempfile::tempdir().unwrap();
+    write_session(d.path(), 100, "abc", "/Users/g2c/repo", "busy");
+    let t = d.path().join("projects/-Users-g2c-repo/abc.jsonl");
+    fs::create_dir_all(t.parent().unwrap()).unwrap();
+    let lines = [user_prompt("hi", T0), assistant_api_error(T0), system_turn_duration(T0)];
+    fs::write(&t, lines.join("\n") + "\n").unwrap();
+    let r = scan(d.path(), &alive(100), now());
+    assert_eq!(r.agents[0].status, AgentStatus::Error);
+}
+
+#[test]
 fn session_without_transcript_is_listed() {
     let d = tempfile::tempdir().unwrap();
     write_session(d.path(), 100, "abc", "/Users/g2c/repo", "idle");
