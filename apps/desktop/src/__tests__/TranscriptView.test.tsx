@@ -215,4 +215,41 @@ describe("TranscriptView", () => {
     expect(revealInFinder).toHaveBeenCalledWith("/work/x");
     await flush();
   });
+
+  it("load_earlier_double_click_no_duplicates", async () => {
+    let release: (p: TranscriptPage) => void = () => {};
+    setup((_, req) =>
+      req.kind === "tail" ? page([asst("new")], 100, 200) : new Promise<TranscriptPage>((r) => (release = r)),
+    );
+    render(<DetailPanel />);
+    await screen.findByText("new");
+    const btn = screen.getByText("Load earlier");
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    await flush();
+    expect(btn).toBeDisabled();
+    await act(async () => release(page([asst("old")], 0, 100)));
+    await screen.findByText("old");
+    const befores = mockCall.mock.calls.filter((c) => (c[1] as { req: Req }).req.kind === "before");
+    expect(befores).toHaveLength(1);
+    expect(screen.getAllByText("old")).toHaveLength(1);
+  });
+
+  it("load_earlier_dropped_after_replace", async () => {
+    let release: (p: TranscriptPage) => void = () => {};
+    setup((_, req) => {
+      if (req.kind === "tail") return page([asst("old tail")], 100, 500);
+      if (req.kind === "after") return page([asst("fresh")], 0, 40);
+      return new Promise<TranscriptPage>((r) => (release = r));
+    });
+    render(<DetailPanel />);
+    await screen.findByText("old tail");
+    fireEvent.click(screen.getByText("Load earlier"));
+    await flush();
+    bump();
+    await screen.findByText("fresh");
+    await act(async () => release(page([asst("stale older")], 0, 100)));
+    expect(screen.queryByText("stale older")).toBeNull();
+    expect(screen.getByText("fresh")).toBeInTheDocument();
+  });
 });

@@ -20,10 +20,10 @@ function ToolCallRow({ e }: { e: Extract<ViewEntry, { kind: "toolCall" }> }) {
       </button>
       {open && (
         <div className="space-y-1 border-t border-gray-200 p-2 dark:border-gray-800">
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words">{e.input}</pre>
+          <pre className="min-w-0 max-h-64 overflow-auto whitespace-pre-wrap break-words">{e.input}</pre>
           {e.result !== null && (
             <pre
-              className={`max-h-64 overflow-auto whitespace-pre-wrap break-words ${
+              className={`min-w-0 max-h-64 overflow-auto whitespace-pre-wrap break-words ${
                 e.isError ? "text-red-600 dark:text-red-400" : "text-gray-600 dark:text-gray-400"
               }`}
               data-error={e.isError || undefined}
@@ -44,7 +44,7 @@ function ThinkingRow({ text }: { text: string }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         {open ? "▾" : "▸"} Thinking
       </button>
-      {open && <div className="mt-1 whitespace-pre-wrap italic">{text}</div>}
+      {open && <div className="mt-1 min-w-0 whitespace-pre-wrap break-words italic">{text}</div>}
     </div>
   );
 }
@@ -53,12 +53,12 @@ function Row({ e }: { e: ViewEntry }) {
   switch (e.kind) {
     case "userPrompt":
       return (
-        <div className="whitespace-pre-wrap rounded bg-blue-50 p-2 text-sm dark:bg-blue-950">
+        <div className="min-w-0 whitespace-pre-wrap break-words rounded bg-blue-50 p-2 text-sm dark:bg-blue-950">
           {e.text}
         </div>
       );
     case "assistantText":
-      return <div className="whitespace-pre-wrap p-2 text-sm">{e.text}</div>;
+      return <div className="min-w-0 whitespace-pre-wrap break-words p-2 text-sm">{e.text}</div>;
     case "thinking":
       return <ThinkingRow text={e.text} />;
     case "toolCall":
@@ -90,7 +90,7 @@ export function TranscriptView({ agentId, subagentId }: { agentId: string; subag
 
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || !t.view) return;
+    if (!el || !t.view || t.op === "none") return;
     if (t.op === "prepend") {
       el.scrollTop += el.scrollHeight - prevHeight.current;
     } else if (t.op === "replace" || stick.current) {
@@ -119,7 +119,8 @@ export function TranscriptView({ agentId, subagentId }: { agentId: string; subag
       {t.view.hasMore && (
         <button
           type="button"
-          className="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-700"
+          disabled={t.loadingEarlier}
+          className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-700"
           onClick={() => {
             prevHeight.current = ref.current?.scrollHeight ?? 0;
             void t.loadEarlier();

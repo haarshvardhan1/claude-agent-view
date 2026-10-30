@@ -6,7 +6,7 @@ export const PAGE_LIMIT = 200;
 
 type PendingResults = Record<string, { result: string; isError: boolean }>;
 export type ViewEntry = Exclude<TranscriptEntry, { kind: "toolResult" }>;
-export type Op = "replace" | "append" | "prepend";
+export type Op = "replace" | "append" | "prepend" | "none";
 
 export interface TranscriptView {
   entries: ViewEntry[];
@@ -21,6 +21,7 @@ export interface TranscriptState {
   loading: boolean;
   notFound: boolean;
   error: string | null;
+  loadingEarlier: boolean;
   /** Which kind of change produced the current view (drives scrolling). */
   op: Op;
   seq: number;
@@ -73,11 +74,15 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
     loading: true,
     notFound: false,
     error: null,
+    loadingEarlier: false,
     op: "replace",
     seq: 0,
   });
   const stateRef = useRef(state);
   const tokenRef = useRef(0);
+  // Bumped on every view replace and reset; drops stale `before` pages.
+  const epochRef = useRef(0);
+  const earlierBusy = useRef(false);
   const ctlRef = useRef<Ctl>({ inflight: false, dirty: false });
   const commit = useCallback((patch: Partial<TranscriptState>) => {
     stateRef.current = { ...stateRef.current, ...patch, seq: stateRef.current.seq + 1 };
@@ -92,8 +97,8 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
 
   const fail = useCallback(
     (e: unknown) => {
-      if (errCode(e) === "notFound") commit({ notFound: true, loading: false });
-      else commit({ error: errMsg(e), loading: false });
+      if (errCode(e) === "notFound") commit({ notFound: true, loading: false, loadingEarlier: false, op: "none" });
+      else commit({ error: errMsg(e), loading: false, loadingEarlier: false, op: "none" });
     },
     [commit],
   );
@@ -117,6 +122,7 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
             if (page.startOffset < cur.endOffset) {
               // File truncated or replaced: the page is a Tail page.
               const n = normalize(page.entries, {});
+              epochRef.current++;
               commit({
                 view: {
                   entries: n.entries,
@@ -151,6 +157,8 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
   // Selection change: reset and load the tail.
   useEffect(() => {
     const tok = ++tokenRef.current;
+    epochRef.current++;
+    earlierBusy.current = false;
     const ctl: Ctl = { inflight: false, dirty: false };
     ctlRef.current = ctl;
     stateRef.current = {
@@ -158,6 +166,7 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
       loading: true,
       notFound: false,
       error: null,
+      loadingEarlier: false,
       op: "replace",
       seq: stateRef.current.seq + 1,
     };
@@ -206,11 +215,19 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
 
   const loadEarlier = useCallback(async () => {
     const v = stateRef.current.view;
-    if (!v || !v.hasMore) return;
+    if (!v || !v.hasMore || earlierBusy.current) return;
+    earlierBusy.current = true;
+    commit({ loadingEarlier: true, op: "none" });
     const tok = tokenRef.current;
+    const epoch = epochRef.current;
     try {
       const page = await fetchPage({ kind: "before", offset: v.startOffset });
       if (tok !== tokenRef.current) return;
+      earlierBusy.current = false;
+      if (epoch !== epochRef.current) {
+        commit({ loadingEarlier: false, op: "none" });
+        return;
+      }
       const cur = stateRef.current.view ?? v;
       const n = normalize([...page.entries, ...cur.entries], cur.pending);
       commit({
@@ -221,10 +238,14 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
           pending: n.pending,
           hasMore: page.entries.length > 0 && page.startOffset > 0,
         },
+        loadingEarlier: false,
         op: "prepend",
       });
     } catch (e) {
-      if (tok === tokenRef.current) fail(e);
+      if (tok === tokenRef.current) {
+        earlierBusy.current = false;
+        fail(e);
+      }
     }
   }, [fetchPage, commit, fail]);
 
