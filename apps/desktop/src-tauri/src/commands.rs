@@ -7,7 +7,10 @@ use av_core::model::{Agent, TranscriptPage};
 use av_core::transcript_view::PageRequest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::plugin::PermissionState;
+use tauri::{AppHandle, State};
+use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_notification::NotificationExt;
 
 /// Every command error reaches the UI as `{ code, message }`.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
@@ -71,9 +74,41 @@ pub fn get_settings(rt: Rt<'_>) -> Result<AppSettings, CmdError> {
     Ok(rt.settings())
 }
 
+/// Applies `launchAtLogin` through autostart first (nothing is saved if
+/// that fails), then saves the settings.
 #[tauri::command]
-pub fn set_settings(rt: Rt<'_>, settings: AppSettings) -> Result<(), CmdError> {
+pub fn set_settings(app: AppHandle, rt: Rt<'_>, settings: AppSettings) -> Result<(), CmdError> {
+    apply_launch_at_login(&app, settings.launch_at_login)?;
     rt.set_settings(settings)
+}
+
+fn apply_launch_at_login(app: &AppHandle, on: bool) -> Result<(), CmdError> {
+    let autostart = app.autolaunch();
+    // If the state can't be read, act anyway.
+    if autostart.is_enabled().ok() == Some(on) {
+        return Ok(());
+    }
+    let res = if on {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+    res.map_err(|e| CmdError::new("autostart", e.to_string()))
+}
+
+/// `"granted" | "denied" | "unknown"`, from the notification plugin.
+pub fn permission_name(state: Option<PermissionState>) -> &'static str {
+    match state {
+        Some(PermissionState::Granted) => "granted",
+        Some(PermissionState::Denied) => "denied",
+        _ => "unknown",
+    }
+}
+
+#[tauri::command]
+pub fn notification_permission(app: AppHandle) -> Result<String, CmdError> {
+    let state = app.notification().permission_state().ok();
+    Ok(permission_name(state).to_string())
 }
 
 #[tauri::command]

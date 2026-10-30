@@ -219,3 +219,31 @@ fn try_watch_polls_until_claude_dir_exists() {
     assert!(handle.is_some());
     assert_eq!(rt.watcher_mode(), "watching");
 }
+
+/// Error status after init: one notification, unless the main window is
+/// focused and visible on that agent.
+fn error_notifications(focused: bool, visible: bool) -> usize {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join(".claude");
+    let probe = SharedProbe::default();
+    let t = live_session(&home, &probe, 100, "a");
+    let rt = runtime(&home, &d.path().join("appdata"), &probe);
+    rt.init(at(1));
+    rt.set_selected_agent(Some("a".into()));
+    rt.set_main_focused(focused);
+    rt.set_main_visible(visible);
+
+    let mut f = fs::OpenOptions::new().append(true).open(&t).unwrap();
+    writeln!(f, "{}", assistant_api_error(&ts(2))).unwrap();
+    let (changes, notes) = rt.step(Input::Transcript(t.clone()), at(3));
+    assert!(!changes.is_empty());
+    assert!(notes.iter().all(|n| n.agent_id == "a"));
+    notes.len()
+}
+
+#[test]
+fn step_notifies_unless_focused_on_agent() {
+    assert_eq!(error_notifications(false, true), 1);
+    assert_eq!(error_notifications(true, false), 1);
+    assert_eq!(error_notifications(true, true), 0);
+}
