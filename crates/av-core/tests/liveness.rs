@@ -77,3 +77,40 @@ fn probe_error_is_unknown() {
     let ok = probe(42, "Thu Oct 29 12:36:53 2026");
     assert_eq!(av_core::liveness::check_alive(&e, &ok), Some(true));
 }
+
+#[test]
+fn parse_pid_lstart_reads_each_line() {
+    let out = "    1 Thu Oct 29 13:09:51 2026    \n76254 Fri Oct  9 09:54:57 2026\n\ngarbage\n";
+    let m = av_core::liveness::parse_pid_lstart(out);
+    assert_eq!(m.len(), 2);
+    assert_eq!(m[&1], "Thu Oct 29 13:09:51 2026");
+    assert_eq!(m[&76254], "Fri Oct  9 09:54:57 2026");
+}
+
+#[test]
+fn system_probe_check_many_matches_check() {
+    let own = std::process::id();
+    // A child that has exited and been reaped: its pid is not running.
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let r = SystemProbe.check_many(&[own, dead]);
+    assert_eq!(r.len(), 2);
+    assert_eq!(r[0], SystemProbe.check(own));
+    assert_eq!(r[1], Ok(None));
+    assert_eq!(SystemProbe.check_many(&[dead]), vec![Ok(None)]);
+    assert!(SystemProbe.check_many(&[]).is_empty());
+    // A pid `ps` rejects outright (above pid_max) must not hide the others.
+    let r = SystemProbe.check_many(&[own, 4_000_000]);
+    assert_eq!(r[0], SystemProbe.check(own));
+    assert!(r[0].as_ref().unwrap().is_some());
+}
+
+#[test]
+fn default_check_many_loops_over_check() {
+    let p = probe(42, "Thu Oct 29 12:36:53 2026");
+    assert_eq!(
+        p.check_many(&[42, 7]),
+        vec![Ok(Some("Thu Oct 29 12:36:53 2026".to_string())), Ok(None)]
+    );
+}

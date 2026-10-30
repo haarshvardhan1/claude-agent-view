@@ -227,6 +227,8 @@ pub struct SharedProbe(pub Arc<Mutex<SharedProbeState>>);
 pub struct SharedProbeState {
     pub procs: HashMap<u32, String>,
     pub fail: bool,
+    /// The pid lists passed to each `check_many` call, in order.
+    pub batches: Vec<Vec<u32>>,
 }
 
 pub const PROC_START: &str = "Thu Oct 29 12:36:53 2026";
@@ -257,6 +259,20 @@ impl ProcessProbe for SharedProbe {
             return Err(ProbeError("ps failed".into()));
         }
         Ok(s.procs.get(&pid).cloned())
+    }
+
+    fn check_many(&self, pids: &[u32]) -> Vec<Result<Option<String>, ProbeError>> {
+        let mut sorted = pids.to_vec();
+        sorted.sort_unstable();
+        self.0.lock().unwrap().batches.push(sorted);
+        pids.iter().map(|&pid| self.check(pid)).collect()
+    }
+}
+
+impl SharedProbe {
+    /// Takes the recorded `check_many` calls.
+    pub fn take_batches(&self) -> Vec<Vec<u32>> {
+        std::mem::take(&mut self.0.lock().unwrap().batches)
     }
 }
 

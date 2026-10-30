@@ -468,3 +468,31 @@ fn exit_clears_stopped_at() {
     let a = one_update(e.handle(Input::Registry, at(8)));
     assert_eq!(a.status, Status::Idle);
 }
+
+#[test]
+fn tick_probes_due_sessions_in_one_batch() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    live_session(home, &probe, 100, "a");
+    live_session(home, &probe, 200, "b");
+    live_session(home, &probe, 300, "c");
+    let mut e = engine(home, &probe, true);
+    e.load(at(1));
+    probe.take_batches();
+
+    // Not due yet: no probe at all.
+    e.handle(Input::Tick, at(3));
+    assert!(probe.take_batches().is_empty());
+
+    // All three due: one batched call; a dead pid becomes exited.
+    probe.set_running(200, false);
+    let changes = e.handle(Input::Tick, at(6));
+    assert_eq!(probe.take_batches(), vec![vec![100, 200, 300]]);
+    assert_eq!(one_update(changes).status, Status::Exited);
+    assert_eq!(status_of(&e, "a"), Status::Working);
+
+    // Exited sessions are not probed again.
+    e.handle(Input::Tick, at(12));
+    assert_eq!(probe.take_batches(), vec![vec![100, 300]]);
+}

@@ -5,7 +5,7 @@
 //! writes to `~/.claude` or signals any process.
 
 use crate::hooks::events::{events_path, EventsTail, HookKind};
-use crate::liveness::{check_alive, ProcessProbe};
+use crate::liveness::{alive_from, check_alive, ProcessProbe};
 use crate::model::{Agent, Change, Status, Subagent};
 use crate::paths::{encode_project_dir, find_transcript, subagents_dir};
 use crate::registry::{read_registry, SessionEntry};
@@ -247,12 +247,7 @@ impl Engine {
                 self.rebuild(touched, now)
             }
             Input::Tick => {
-                let max_age = Duration::seconds(LIVENESS_RECHECK_SECS);
-                for s in self.sessions.values_mut() {
-                    if s.in_registry && s.alive && now - s.last_probe >= max_age {
-                        apply_probe(s, &*self.probe, now);
-                    }
-                }
+                self.probe_due(now);
                 let mut changes = self.expire(now);
                 changes.extend(self.rebuild_all(now));
                 changes
@@ -265,6 +260,28 @@ impl Engine {
                 }
                 self.read_events(now);
                 self.rebuild_all(now)
+            }
+        }
+    }
+
+    /// Re-probes every live session whose last probe is at least
+    /// `LIVENESS_RECHECK_SECS` old, with one batched probe call.
+    fn probe_due(&mut self, now: DateTime<Utc>) {
+        let max_age = Duration::seconds(LIVENESS_RECHECK_SECS);
+        let mut due: Vec<&mut Session> = self
+            .sessions
+            .values_mut()
+            .filter(|s| s.in_registry && s.alive && now - s.last_probe >= max_age)
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let pids: Vec<u32> = due.iter().map(|s| s.entry.pid).collect();
+        let results = self.probe.check_many(&pids);
+        for (s, probed) in due.iter_mut().zip(results) {
+            s.last_probe = now;
+            if let Some(alive) = alive_from(&s.entry, probed) {
+                set_alive(s, alive, now);
             }
         }
     }
