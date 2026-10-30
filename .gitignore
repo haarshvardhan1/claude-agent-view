@@ -1,2 +1,5 @@
 target/
 .superpowers/
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/binaries/
