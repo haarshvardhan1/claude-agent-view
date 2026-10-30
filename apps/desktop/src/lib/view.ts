@@ -29,9 +29,9 @@ export function statusGroup(s: Status): StatusGroup {
 const ts = (iso: string | null) => (iso ? Date.parse(iso) : 0);
 
 /** Agents after search and the exited rule, before the chip filter. */
-export function baseVisible(state: ViewState, now: Date): Agent[] {
+export function baseVisible(state: ViewState, now: Date, forceExited = false): Agent[] {
   const q = state.search.trim().toLowerCase();
-  const showExited = state.showExited || state.filter === "exited";
+  const showExited = forceExited || state.showExited || state.filter === "exited";
   return Object.values(state.agents).filter((a) => {
     if (q) {
       const hay = [a.title, a.projectName, a.gitBranch];
@@ -73,5 +73,12 @@ export function groupAgents(agents: Agent[], by: GroupBy): [string, Agent[]][] {
 export function counts(agents: Agent[]): Record<StatusGroup, number> {
   const c: Record<StatusGroup, number> = { needsYou: 0, working: 0, idle: 0, exited: 0 };
   for (const a of agents) c[statusGroup(a.status)]++;
+  return c;
+}
+
+/** Chip counts: exited counts search matches within 24 h regardless of `showExited`. */
+export function chipCounts(state: ViewState, now: Date): Record<StatusGroup, number> {
+  const c = counts(baseVisible(state, now));
+  c.exited = counts(baseVisible(state, now, true)).exited;
   return c;
 }

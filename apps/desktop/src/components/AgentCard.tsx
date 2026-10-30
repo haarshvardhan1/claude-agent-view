@@ -43,9 +43,12 @@ export function AgentCard({ agent, now }: { agent: Agent; now: Date }) {
         tabIndex={0}
         onClick={() => select({ agentId: agent.id })}
         onKeyDown={(e) => {
-          if (e.key === "Enter") select({ agentId: agent.id });
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            select({ agentId: agent.id });
+          }
         }}
-        className="cursor-pointer"
+        className="cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
       >
         <div className="flex items-center gap-2">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dotClass(agent.status.kind)}`} />

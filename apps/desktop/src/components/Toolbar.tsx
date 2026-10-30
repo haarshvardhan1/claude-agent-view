@@ -1,4 +1,4 @@
-import { baseVisible, counts } from "../lib/view";
+import { chipCounts } from "../lib/view";
 import { useStore } from "../store";
 import type { Filter, GroupBy, StatusGroup } from "../types";
 
@@ -17,8 +17,7 @@ export function Toolbar({ now }: { now: Date }) {
   const search = useStore((s) => s.search);
   const groupBy = useStore((s) => s.groupBy);
   const { setFilter, setGroupBy, setShowExited, setSearch } = useStore.getState();
-  const base = baseVisible({ agents, filter, showExited, search }, now);
-  const c = counts(base);
+  const c = chipCounts({ agents, filter, showExited, search }, now);
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-3 py-2 dark:border-gray-800">
