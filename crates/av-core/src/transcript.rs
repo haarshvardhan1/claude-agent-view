@@ -101,142 +101,144 @@ impl SummaryState {
     }
 
     pub fn apply_line(&mut self, line: &str) {
-    let s = &mut self.s;
+        let s = &mut self.s;
         let Ok(rec) = serde_json::from_str::<Value>(line) else {
-    s.skipped_lines += 1;
-        return;
-    };
-    let rtype = rec.get("type").and_then(Value::as_str).unwrap_or("");
+            s.skipped_lines += 1;
+            return;
+        };
+        let rtype = rec.get("type").and_then(Value::as_str).unwrap_or("");
 
-    if rtype == "agent-name" {
-        if let Some(n) = rec.get("agentName").and_then(Value::as_str) {
-            s.agent_name = Some(n.to_string());
-        }
-        return;
-    }
-    if rtype == "ai-title" {
-        if let Some(t) = rec.get("aiTitle").and_then(Value::as_str) {
-            self.ai_title = Some(t.to_string());
-        }
-        return;
-    }
-    if !matches!(rtype, "user" | "assistant" | "system") {
-        return;
-    }
-
-    let ts = rec
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| t.with_timezone(&Utc));
-    if let Some(t) = ts {
-        s.last_activity = Some(t);
-    }
-    if let Some(b) = rec.get("gitBranch").and_then(Value::as_str) {
-        s.git_branch = Some(b.to_string());
-    }
-
-    let msg = rec.get("message");
-    // System records other than level=error (e.g. the turn_duration record
-    // written after every turn) leave the flag unchanged.
-    match rtype {
-        "system" => {
-            if rec.get("level").and_then(Value::as_str) == Some("error") {
-                s.last_is_error = true;
+        if rtype == "agent-name" {
+            if let Some(n) = rec.get("agentName").and_then(Value::as_str) {
+                s.agent_name = Some(n.to_string());
             }
-            if rec.get("subtype").and_then(Value::as_str) == Some("turn_duration") {
-                if let Some(t) = ts {
-                    s.turn_ended_at = Some(t);
-                }
+            return;
+        }
+        if rtype == "ai-title" {
+            if let Some(t) = rec.get("aiTitle").and_then(Value::as_str) {
+                self.ai_title = Some(t.to_string());
             }
+            return;
         }
-        "assistant" => {
-            s.last_is_error = rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
-            s.last_error_kind = if s.last_is_error {
-                rec.get("error").and_then(Value::as_str).map(str::to_string)
-            } else {
-                None
-            };
+        if !matches!(rtype, "user" | "assistant" | "system") {
+            return;
         }
-        _ => {
-            s.last_is_error = false;
-            s.last_error_kind = None;
-        }
-    }
 
-    match rtype {
-        "assistant" => {
-            let Some(msg) = msg else { return };
-            let synthetic = msg.get("model").and_then(Value::as_str) == Some(SYNTHETIC_MODEL);
-            if !synthetic {
-                if let Some(m) = msg.get("model").and_then(Value::as_str) {
-                    s.model = Some(m.to_string());
+        let ts = rec
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc));
+        if let Some(t) = ts {
+            s.last_activity = Some(t);
+        }
+        if let Some(b) = rec.get("gitBranch").and_then(Value::as_str) {
+            s.git_branch = Some(b.to_string());
+        }
+
+        let msg = rec.get("message");
+        // System records other than level=error (e.g. the turn_duration record
+        // written after every turn) leave the flag unchanged.
+        match rtype {
+            "system" => {
+                if rec.get("level").and_then(Value::as_str) == Some("error") {
+                    s.last_is_error = true;
                 }
-                if let Some(r) = msg.get("stop_reason").and_then(Value::as_str) {
-                    s.last_stop_reason = Some(r.to_string());
-                }
-                if let (Some(id), Some(u)) =
-                    (msg.get("id").and_then(Value::as_str), msg.get("usage"))
-                {
-                    self.usage_by_msg.insert(id.to_string(), usage_totals(u));
-                }
-                if let Some(u) = msg.get("usage") {
-                    let t = usage_totals(u);
-                    let ctx = t.input + t.cache_write + t.cache_read;
-                    s.context_used = Some(ctx);
-                    s.max_context_used = s.max_context_used.max(ctx);
-                }
-            }
-            if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
-                for b in blocks {
-                    if b.get("type").and_then(Value::as_str) != Some("tool_use") {
-                        return;
-                    }
-                    let name = b.get("name").and_then(Value::as_str).unwrap_or("");
-                    if name == "SubagentHandback" {
-                        s.handed_back = true;
-                    }
-                    if let (Some(id), Some(t)) = (b.get("id").and_then(Value::as_str), ts) {
-                        self.open.push((id.to_string(), name.to_string(), t));
+                if rec.get("subtype").and_then(Value::as_str) == Some("turn_duration") {
+                    if let Some(t) = ts {
+                        s.turn_ended_at = Some(t);
                     }
                 }
             }
+            "assistant" => {
+                s.last_is_error =
+                    rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
+                s.last_error_kind = if s.last_is_error {
+                    rec.get("error").and_then(Value::as_str).map(str::to_string)
+                } else {
+                    None
+                };
+            }
+            _ => {
+                s.last_is_error = false;
+                s.last_error_kind = None;
+            }
         }
-        "user" => {
-            let Some(msg) = msg else { return };
-            // tool_result blocks close their tool but are not prompts.
-            if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
-                for b in blocks {
-                    if b.get("type").and_then(Value::as_str) == Some("tool_result") {
-                        if let Some(id) = b.get("tool_use_id").and_then(Value::as_str) {
-                            self.open.retain(|(oid, _, _)| oid != id);
+
+        match rtype {
+            "assistant" => {
+                let Some(msg) = msg else { return };
+                let synthetic = msg.get("model").and_then(Value::as_str) == Some(SYNTHETIC_MODEL);
+                if !synthetic {
+                    if let Some(m) = msg.get("model").and_then(Value::as_str) {
+                        s.model = Some(m.to_string());
+                    }
+                    if let Some(r) = msg.get("stop_reason").and_then(Value::as_str) {
+                        s.last_stop_reason = Some(r.to_string());
+                    }
+                    if let (Some(id), Some(u)) =
+                        (msg.get("id").and_then(Value::as_str), msg.get("usage"))
+                    {
+                        self.usage_by_msg.insert(id.to_string(), usage_totals(u));
+                    }
+                    if let Some(u) = msg.get("usage") {
+                        let t = usage_totals(u);
+                        let ctx = t.input + t.cache_write + t.cache_read;
+                        s.context_used = Some(ctx);
+                        s.max_context_used = s.max_context_used.max(ctx);
+                    }
+                }
+                if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
+                    for b in blocks {
+                        if b.get("type").and_then(Value::as_str) != Some("tool_use") {
+                            continue;
+                        }
+                        let name = b.get("name").and_then(Value::as_str).unwrap_or("");
+                        if name == "SubagentHandback" {
+                            s.handed_back = true;
+                        }
+                        if let (Some(id), Some(t)) = (b.get("id").and_then(Value::as_str), ts) {
+                            self.open.push((id.to_string(), name.to_string(), t));
                         }
                     }
                 }
             }
-            let is_meta = rec.get("isMeta").and_then(Value::as_bool) == Some(true);
-            let has_tool_result = msg
-                .get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|bs| {
-                    bs.iter()
-                        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-                });
-            if is_meta || has_tool_result {
-                return;
-            }
-            if let Some(text) = user_text(msg) {
-                if text.trim_start().starts_with('<') {
+            "user" => {
+                let Some(msg) = msg else { return };
+                // tool_result blocks close their tool but are not prompts.
+                if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
+                    for b in blocks {
+                        if b.get("type").and_then(Value::as_str) == Some("tool_result") {
+                            if let Some(id) = b.get("tool_use_id").and_then(Value::as_str) {
+                                self.open.retain(|(oid, _, _)| oid != id);
+                            }
+                        }
+                    }
+                }
+                let is_meta = rec.get("isMeta").and_then(Value::as_bool) == Some(true);
+                let has_tool_result =
+                    msg.get("content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|bs| {
+                            bs.iter().any(|b| {
+                                b.get("type").and_then(Value::as_str) == Some("tool_result")
+                            })
+                        });
+                if is_meta || has_tool_result {
                     return;
                 }
-                self.open.clear();
-                if self.first_prompt.is_none() {
-                    self.first_prompt = title_from(text);
+                if let Some(text) = user_text(msg) {
+                    if text.trim_start().starts_with('<') {
+                        return;
+                    }
+                    self.open.clear();
+                    if self.first_prompt.is_none() {
+                        self.first_prompt = title_from(text);
+                    }
                 }
             }
+            _ => {}
         }
-        _ => {}
-    }
     }
 
     pub fn summary(&self) -> TranscriptSummary {

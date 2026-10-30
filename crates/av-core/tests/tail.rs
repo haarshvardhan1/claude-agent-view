@@ -13,7 +13,11 @@ fn ts(s: &str) -> DateTime<Utc> {
 }
 
 fn append(p: &std::path::Path, bytes: &[u8]) {
-    let mut f = OpenOptions::new().append(true).create(true).open(p).unwrap();
+    let mut f = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(p)
+        .unwrap();
     f.write_all(bytes).unwrap();
 }
 
@@ -74,7 +78,10 @@ fn half_line_is_carried() {
 fn truncation_resets() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
-    write_lines(&p, &[ai_title("A long first title here"), user_prompt("x", T0)]);
+    write_lines(
+        &p,
+        &[ai_title("A long first title here"), user_prompt("x", T0)],
+    );
     let mut tail = TranscriptTail::new(p.clone());
     tail.read_new().unwrap();
     write_lines(&p, &[ai_title("B")]);
@@ -137,4 +144,49 @@ fn error_kind() {
     let s = summarize_transcript(&p).unwrap();
     assert!(!s.last_is_error);
     assert_eq!(s.last_error_kind, None);
+}
+
+fn mixed_block(tool_name: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "timestamp": T1,
+        "message": {
+            "id": "mx", "model": "claude-opus-5-5", "role": "assistant",
+            "content": [
+                {"type": "text", "text": "working"},
+                {"type": "tool_use", "id": "tx", "name": tool_name, "input": {}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    })
+    .to_string()
+}
+
+#[test]
+fn tool_use_after_text_block_is_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.jsonl");
+    write_lines(&p, &[mixed_block("Bash")]);
+    let mut tail = TranscriptTail::new(p.clone());
+    tail.read_new().unwrap();
+    for s in [summarize_transcript(&p).unwrap(), tail.summary()] {
+        assert_eq!(
+            s.pending_tool.as_ref().map(|t| t.name.as_str()),
+            Some("Bash")
+        );
+        assert!(!s.handed_back);
+    }
+}
+
+#[test]
+fn handback_after_text_block_sets_handed_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.jsonl");
+    write_lines(&p, &[mixed_block("SubagentHandback")]);
+    let mut tail = TranscriptTail::new(p.clone());
+    tail.read_new().unwrap();
+    for s in [summarize_transcript(&p).unwrap(), tail.summary()] {
+        assert!(s.handed_back);
+        assert!(s.pending_tool.is_some());
+    }
 }
