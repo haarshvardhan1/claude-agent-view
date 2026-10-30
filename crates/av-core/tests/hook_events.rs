@@ -62,7 +62,9 @@ fn write_then_parse_roundtrip() {
     assert_eq!(ev[0].received_at, now());
     assert_eq!(
         ev[0].kind,
-        HookKind::Notification(HookSignal::Permission { tool: None })
+        HookKind::Notification(HookSignal::Permission {
+            tool: Some("Bash".into())
+        })
     );
 }
 

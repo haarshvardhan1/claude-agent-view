@@ -30,19 +30,25 @@ pub struct HookEvent {
     pub received_at: DateTime<Utc>,
 }
 
+fn permission_tool(message: &str) -> Option<String> {
+    message
+        .split_once("permission to use ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+}
+
 pub fn classify_notification(notification_type: Option<&str>, message: &str) -> Option<HookSignal> {
     match notification_type {
-        Some("permission_prompt") => Some(HookSignal::Permission { tool: None }),
+        Some("permission_prompt") => Some(HookSignal::Permission {
+            tool: permission_tool(message),
+        }),
         Some("idle_prompt") => Some(HookSignal::WaitingInput),
         Some(_) => None,
         None => {
             if message.contains("needs your permission") {
-                let tool = message
-                    .split_once("permission to use ")
-                    .and_then(|(_, rest)| rest.split_whitespace().next())
-                    .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
-                    .filter(|w| !w.is_empty())
-                    .map(str::to_string);
+                let tool = permission_tool(message);
                 Some(HookSignal::Permission { tool })
             } else if message.contains("waiting for your input") {
                 Some(HookSignal::WaitingInput)
@@ -158,6 +164,7 @@ impl EventsTail {
     }
 }
 
+/// Meant to run only at app start: an append landing during the rename would be lost.
 /// If the file exceeds `max_bytes`, keeps the last `max_bytes` after the
 /// first newline in that window (whole lines only). Atomic temp + rename.
 pub fn trim_events_file(path: &Path, max_bytes: u64) -> std::io::Result<()> {
