@@ -47,9 +47,33 @@ fn missing_proc_start_alive_if_running() {
 // it passes either way.
 #[test]
 fn system_probe_reports_utc() {
-    let s = SystemProbe.proc_start(std::process::id()).expect("own pid is running");
+    let s = SystemProbe
+        .proc_start(std::process::id())
+        .expect("own pid is running");
     let norm = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let t = chrono::NaiveDateTime::parse_from_str(&norm, "%a %b %e %H:%M:%S %Y").unwrap();
     let diff = (chrono::Utc::now().naive_utc() - t).num_seconds().abs();
-    assert!(diff < 600, "proc start {norm} is {diff}s from now; not UTC?");
+    assert!(
+        diff < 600,
+        "proc start {norm} is {diff}s from now; not UTC?"
+    );
+}
+
+struct ErrProbe;
+impl ProcessProbe for ErrProbe {
+    fn proc_start(&self, _pid: u32) -> Option<String> {
+        None
+    }
+    fn check(&self, _pid: u32) -> Result<Option<String>, av_core::liveness::ProbeError> {
+        Err(av_core::liveness::ProbeError("boom".into()))
+    }
+}
+
+#[test]
+fn probe_error_is_unknown() {
+    let e = entry(42, Some("Thu Oct 29 12:36:53 2026"));
+    assert_eq!(av_core::liveness::check_alive(&e, &ErrProbe), None);
+    assert!(!is_alive(&e, &ErrProbe));
+    let ok = probe(42, "Thu Oct 29 12:36:53 2026");
+    assert_eq!(av_core::liveness::check_alive(&e, &ok), Some(true));
 }
