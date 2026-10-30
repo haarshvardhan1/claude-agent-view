@@ -16,3 +16,4 @@ pub use status::AgentStatus;
 pub mod view;
 pub mod engine;
 pub mod watch;
+pub mod notifier;
