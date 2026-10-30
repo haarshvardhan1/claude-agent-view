@@ -2,6 +2,7 @@ pub mod registry;
 pub mod liveness;
 pub mod paths;
 pub mod transcript;
+pub mod transcript_view;
 pub mod subagents;
 pub mod status;
 pub mod scan;

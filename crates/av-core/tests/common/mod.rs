@@ -158,7 +158,11 @@ pub fn assistant_api_error(ts: &str) -> String {
 pub fn write_subagent(transcript: &Path, id: &str, lines: &[String], meta: Option<&str>) {
     let dir = av_core::paths::subagents_dir(transcript);
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(format!("agent-{id}.jsonl")), lines.join("\n") + "\n").unwrap();
+    fs::write(
+        dir.join(format!("agent-{id}.jsonl")),
+        lines.join("\n") + "\n",
+    )
+    .unwrap();
     if let Some(m) = meta {
         fs::write(dir.join(format!("agent-{id}.meta.json")), m).unwrap();
     }
@@ -254,4 +258,39 @@ impl ProcessProbe for SharedProbe {
         }
         Ok(s.procs.get(&pid).cloned())
     }
+}
+
+// ---- transcript view builders ----
+
+/// Assistant record with a text block followed by a tool_use block.
+pub fn assistant_text_and_tool(
+    text: &str,
+    tool_id: &str,
+    name: &str,
+    input: serde_json::Value,
+    ts: &str,
+) -> String {
+    serde_json::json!({
+        "type": "assistant", "timestamp": ts,
+        "message": {"id": "m", "role": "assistant", "content": [
+            {"type": "text", "text": text},
+            {"type": "tool_use", "id": tool_id, "name": name, "input": input},
+        ]},
+    })
+    .to_string()
+}
+
+pub fn tool_result_with(
+    tool_id: &str,
+    content: serde_json::Value,
+    is_error: bool,
+    ts: &str,
+) -> String {
+    serde_json::json!({
+        "type": "user", "timestamp": ts,
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tool_id, "content": content, "is_error": is_error}
+        ]},
+    })
+    .to_string()
 }

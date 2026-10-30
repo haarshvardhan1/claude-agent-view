@@ -55,7 +55,7 @@ pub struct TranscriptSummary {
 
 /// Text of a user message if it is a plain prompt (string content, or a list
 /// with a `text` block). Returns None for tool results and the like.
-fn user_text(msg: &Value) -> Option<&str> {
+pub(crate) fn user_text(msg: &Value) -> Option<&str> {
     match msg.get("content")? {
         Value::String(s) => Some(s),
         Value::Array(blocks) => blocks
