@@ -150,3 +150,18 @@ fn tool_call_entry_shape() {
     assert_eq!(v["isError"], json!(true));
     assert!(v.get("is_error").is_none());
 }
+
+#[test]
+fn tool_result_entry_shape() {
+    let e = TranscriptEntry::ToolResult {
+        tool_use_id: "t1".into(),
+        result: "ok".into(),
+        is_error: true,
+        timestamp: None,
+    };
+    let v = to_value(e).unwrap();
+    assert_eq!(v["kind"], json!("toolResult"));
+    assert_eq!(v["toolUseId"], json!("t1"));
+    assert_eq!(v["isError"], json!(true));
+    assert!(v.get("tool_use_id").is_none());
+}

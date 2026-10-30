@@ -20,6 +20,7 @@ fn text_of(e: &E) -> &str {
             text
         }
         E::ToolCall { name, .. } => name,
+        E::ToolResult { result, .. } => result,
     }
 }
 
@@ -70,15 +71,6 @@ fn after_returns_new() {
 }
 
 #[test]
-fn after_past_eof_is_empty() {
-    let d = tempfile::tempdir().unwrap();
-    let p = write(&d, &prompts(2));
-    let page = read_page(&p, PageRequest::After(999_999), 200).unwrap();
-    assert!(page.entries.is_empty());
-    assert_eq!((page.start_offset, page.end_offset), (999_999, 999_999));
-}
-
-#[test]
 fn tool_call_paired() {
     let d = tempfile::tempdir().unwrap();
     let p = write(
@@ -101,7 +93,8 @@ fn tool_call_paired() {
         ],
     );
     let page = read_page(&p, PageRequest::Tail, 200).unwrap();
-    assert_eq!(page.entries.len(), 2);
+    assert_eq!(page.entries.len(), 3); // text, paired call, orphan "zzz" result
+    assert!(matches!(&page.entries[2], E::ToolResult { tool_use_id, .. } if tool_use_id == "zzz"));
     assert!(matches!(&page.entries[0], E::AssistantText { text, .. } if text == "running"));
     match &page.entries[1] {
         E::ToolCall {
@@ -132,7 +125,9 @@ fn unpaired_call_across_pages_has_no_result() {
         ],
     );
     let page = read_page(&p, PageRequest::Tail, 1).unwrap();
-    assert_eq!(page.entries.len(), 1); // just the prompt; result dropped
+    // the prompt plus the orphan result (its call is outside the page)
+    assert_eq!(page.entries.len(), 2);
+    assert!(matches!(&page.entries[1], E::ToolResult { tool_use_id, .. } if tool_use_id == "t1"));
 }
 
 #[test]
@@ -246,4 +241,56 @@ fn summaries() {
             .count(),
         120
     );
+}
+
+#[test]
+fn after_on_truncated_file_returns_tail() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(&d, &prompts(5));
+    let len = fs::metadata(&p).unwrap().len();
+    let page = read_page(&p, PageRequest::After(len + 1000), 200).unwrap();
+    assert_eq!(page, read_page(&p, PageRequest::Tail, 200).unwrap());
+    assert_eq!(page.entries.len(), 5);
+}
+
+#[test]
+fn after_emits_orphan_result() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(&d, &[assistant_tool_use("m", "t9", "Bash", T0)]);
+    let tail = read_page(&p, PageRequest::Tail, 200).unwrap();
+    let mut f = fs::OpenOptions::new().append(true).open(&p).unwrap();
+    writeln!(
+        f,
+        "{}",
+        tool_result_with("t9", serde_json::json!("done"), true, T0)
+    )
+    .unwrap();
+    let page = read_page(&p, PageRequest::After(tail.end_offset), 200).unwrap();
+    assert_eq!(page.entries.len(), 1);
+    match &page.entries[0] {
+        E::ToolResult {
+            tool_use_id,
+            result,
+            is_error,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "t9");
+            assert_eq!(result, "done");
+            assert!(*is_error);
+        }
+        e => panic!("{e:?}"),
+    }
+}
+
+#[test]
+fn after_respects_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(&d, &prompts(300));
+    let first = read_page(&p, PageRequest::After(0), 200).unwrap();
+    assert_eq!(first.entries.len(), 200);
+    assert_eq!(text_of(&first.entries[199]), "p199");
+    let rest = read_page(&p, PageRequest::After(first.end_offset), 200).unwrap();
+    assert_eq!(rest.entries.len(), 100);
+    assert_eq!(text_of(&rest.entries[0]), "p200");
+    assert_eq!(rest.end_offset, fs::metadata(&p).unwrap().len());
 }

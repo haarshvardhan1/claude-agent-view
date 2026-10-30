@@ -141,6 +141,13 @@ pub enum TranscriptEntry {
         is_error: bool,
         timestamp: Option<DateTime<Utc>>,
     },
+    /// A tool result whose call is not in the same page.
+    ToolResult {
+        tool_use_id: String,
+        result: String,
+        is_error: bool,
+        timestamp: Option<DateTime<Utc>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

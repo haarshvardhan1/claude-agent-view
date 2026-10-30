@@ -64,6 +64,7 @@ enum Item {
         id: String,
         content: String,
         is_error: bool,
+        timestamp: Option<DateTime<Utc>>,
     },
 }
 
@@ -107,6 +108,7 @@ fn parse_line(line: &[u8]) -> Vec<Item> {
                                 .into(),
                             content: cut(&result_text(b.get("content"))),
                             is_error: b.get("is_error").and_then(Value::as_bool) == Some(true),
+                            timestamp: ts,
                         });
                     }
                 }
@@ -179,21 +181,29 @@ fn assemble(records: Vec<Vec<Item>>) -> Vec<TranscriptEntry> {
                 id,
                 content,
                 is_error,
+                timestamp,
             } => {
-                for e in entries.iter_mut().rev() {
-                    if let TranscriptEntry::ToolCall {
+                let slot = entries.iter_mut().rev().find_map(|e| match e {
+                    TranscriptEntry::ToolCall {
                         id: cid,
                         result,
-                        is_error: err,
+                        is_error,
                         ..
-                    } = e
-                    {
-                        if *cid == id && result.is_none() {
-                            *result = Some(content);
-                            *err = is_error;
-                            break;
-                        }
-                    }
+                    } if *cid == id && result.is_none() => Some((result, is_error)),
+                    _ => None,
+                });
+                let paired = slot.is_some();
+                if let Some((result, err)) = slot {
+                    *result = Some(content.clone());
+                    *err = is_error;
+                }
+                if !paired {
+                    entries.push(TranscriptEntry::ToolResult {
+                        tool_use_id: id,
+                        result: content,
+                        is_error,
+                        timestamp,
+                    });
                 }
             }
         }
@@ -300,18 +310,16 @@ pub fn read_page(path: &Path, req: PageRequest, limit: usize) -> std::io::Result
         PageRequest::Before(off) => read_before(&mut f, off.min(len), limit),
         PageRequest::After(off) => {
             if off > len {
-                return Ok(TranscriptPage {
-                    entries: vec![],
-                    start_offset: off,
-                    end_offset: off,
-                });
+                // Truncated or rotated: the caller replaces its view.
+                return read_before(&mut f, len, limit);
             }
             f.seek(SeekFrom::Start(off))?;
             let mut r = BufReader::new(f);
             let mut pos = off;
             let mut records = Vec::new();
+            let mut count = 0;
             let mut buf = Vec::new();
-            loop {
+            while count < limit {
                 buf.clear();
                 let n = r.read_until(b'\n', &mut buf)?;
                 if n == 0 || buf.last() != Some(&b'\n') {
@@ -319,7 +327,9 @@ pub fn read_page(path: &Path, req: PageRequest, limit: usize) -> std::io::Result
                 }
                 pos += n as u64;
                 buf.pop();
-                records.push(parse_line(&buf));
+                let items = parse_line(&buf);
+                count += entry_count(&items);
+                records.push(items);
             }
             Ok(TranscriptPage {
                 entries: assemble(records),
