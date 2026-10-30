@@ -53,6 +53,8 @@ struct Session {
     tail: TranscriptTail,
     transcript_exists: bool,
     read_error: Option<String>,
+    /// Set while this session's registry file fails to read or parse.
+    registry_error: Option<String>,
     subs: HashMap<PathBuf, SubTail>,
     subs_view: Vec<Subagent>,
     subs_dirty: bool,
@@ -82,6 +84,18 @@ fn entry_value(e: &SessionEntry) -> serde_json::Value {
 
 fn ms_to_utc(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms).single().unwrap_or_default()
+}
+
+/// `(pid, error)` for each registry file that failed to read or parse, from
+/// `read_registry` warnings of the form `<pid>.json: <error>`.
+fn failed_registry_pids(warnings: &[String]) -> Vec<(u32, String)> {
+    warnings
+        .iter()
+        .filter_map(|w| {
+            let (pid, err) = w.split_once(".json: ")?;
+            Some((pid.parse().ok()?, err.to_string()))
+        })
+        .collect()
 }
 
 fn is_subagent_file(path: &Path) -> bool {
@@ -163,6 +177,9 @@ fn set_alive(s: &mut Session, alive: bool, now: DateTime<Utc>) {
     if s.alive != alive {
         s.alive = alive;
         s.exited_at = (!alive).then_some(now);
+        if !alive {
+            s.stopped_at = None;
+        }
         s.subs_dirty = true;
     }
 }
@@ -307,6 +324,7 @@ impl Engine {
             tail: TranscriptTail::new(path),
             transcript_exists: false,
             read_error: None,
+            registry_error: None,
             subs: HashMap::new(),
             subs_view: Vec::new(),
             subs_dirty: true,
@@ -324,15 +342,35 @@ impl Engine {
 
     /// Re-reads the registry. New ids are added; known ids whose entry changed
     /// are re-probed; ids no longer listed (file gone, or its pid now names
-    /// another session) become exited. Returns the touched session ids.
+    /// another session) become exited. A known session whose file failed to
+    /// read keeps its state and shows `Unknown` until the next good read.
+    /// Returns the touched session ids.
     fn sync_registry(&mut self, now: DateTime<Utc>) -> Vec<String> {
-        let (entries, _warnings) = read_registry(&self.claude_dir);
+        let (entries, warnings) = read_registry(&self.claude_dir);
         let mut seen = HashSet::new();
         let mut touched = Vec::new();
+        for (pid, err) in failed_registry_pids(&warnings) {
+            let pid_owner = self
+                .sessions
+                .iter_mut()
+                .find(|(_, s)| s.in_registry && s.entry.pid == pid);
+            if let Some((id, s)) = pid_owner {
+                seen.insert(id.clone());
+                if s.registry_error.as_ref() != Some(&err) {
+                    s.registry_error = Some(err);
+                    touched.push(id.clone());
+                }
+            }
+        }
         for entry in entries {
             let id = entry.session_id.clone();
             if !seen.insert(id.clone()) {
                 continue;
+            }
+            if let Some(s) = self.sessions.get_mut(&id) {
+                if s.registry_error.take().is_some() {
+                    touched.push(id.clone());
+                }
             }
             if let Some(dead) = self.tombstones.get(&id) {
                 if *dead == entry_value(&entry) {
@@ -508,7 +546,7 @@ impl Engine {
 
         let status = if !s.alive {
             Status::Exited
-        } else if let Some(reason) = &s.read_error {
+        } else if let Some(reason) = s.registry_error.as_ref().or(s.read_error.as_ref()) {
             Status::Unknown {
                 reason: reason.clone(),
             }

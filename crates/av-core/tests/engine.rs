@@ -410,3 +410,61 @@ fn unrelated_path_ignored() {
     write_lines(&other, &[user_prompt("hi", &ts(2))]);
     assert!(e.handle(Input::Transcript(other), at(2)).is_empty());
 }
+
+#[test]
+fn unreadable_registry_keeps_state() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    live_session(home, &probe, 100, "a");
+    let mut e = engine(home, &probe, true);
+    e.load(at(1));
+    permission_event(home, "a", at(2));
+    let a = one_update(e.handle(Input::Events, at(2)));
+    assert!(matches!(a.status, Status::NeedsPermission { .. }));
+
+    // Torn read: the registry file is garbage for one round.
+    let reg = home.join("sessions/100.json");
+    let good = fs::read(&reg).unwrap();
+    fs::write(&reg, "{\"pid\": 10").unwrap();
+    let a = one_update(e.handle(Input::Registry, at(3)));
+    assert!(matches!(a.status, Status::Unknown { .. }), "{:?}", a.status);
+    assert!(e.handle(Input::Registry, at(4)).is_empty());
+    // Still alive (no exited_at): a Tick does not expire or exit it.
+    assert!(e.handle(Input::Tick, at(5)).is_empty());
+
+    // Restored: the hook survived.
+    fs::write(&reg, good).unwrap();
+    let a = one_update(e.handle(Input::Registry, at(6)));
+    assert_eq!(
+        a.status,
+        Status::NeedsPermission {
+            tool: Some("Bash".into())
+        }
+    );
+}
+
+#[test]
+fn exit_clears_stopped_at() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    live_session(home, &probe, 100, "a");
+    write_session(home, 100, "a", CWD, "idle");
+    let mut e = engine(home, &probe, true);
+    e.load(at(1));
+    stop_event(home, "a", at(2));
+    let a = one_update(e.handle(Input::Events, at(2)));
+    assert_eq!(a.status, Status::WaitingInput);
+
+    probe.set_running(100, false);
+    let a = one_update(e.handle(Input::Tick, at(7)));
+    assert_eq!(a.status, Status::Exited);
+
+    // The session comes back (changed registry entry, process running):
+    // the Stop from before the exit no longer counts.
+    probe.set_running(100, true);
+    write_session_at(home, 100, "a", CWD, "idle", 1793281174333 + 1);
+    let a = one_update(e.handle(Input::Registry, at(8)));
+    assert_eq!(a.status, Status::Idle);
+}
