@@ -32,17 +32,23 @@ enum Cmd {
         #[arg(long)]
         claude_dir: Option<PathBuf>,
     },
-    /// Record a Claude Code hook event (stdin JSON); never prints, never fails
-    Hook {
-        /// Marker only; accepted and ignored
-        #[arg(long)]
-        agent_viewer: bool,
-        #[arg(long)]
-        claude_dir: Option<PathBuf>,
-        /// Unknown extra arguments are ignored so future hook flags cannot break a session
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        _rest: Vec<String>,
-    },
+    /// Record a Claude Code hook event (stdin JSON); never prints, never fails.
+    /// Handled before clap runs; accepts --agent-viewer and --claude-dir <dir>.
+    Hook,
+}
+
+/// Finds `--claude-dir <dir>` or `--claude-dir=<dir>` anywhere; ignores all else.
+fn hook_claude_dir(args: &[std::ffi::OsString]) -> Option<PathBuf> {
+    let mut found = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--claude-dir" {
+            found = it.next().map(PathBuf::from);
+        } else if let Some(v) = a.to_str().and_then(|t| t.strip_prefix("--claude-dir=")) {
+            found = Some(PathBuf::from(v));
+        }
+    }
+    found.filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Reads stdin and appends it to the events file. Every error and panic is swallowed.
@@ -194,8 +200,13 @@ fn print_warnings(r: &ScanResult) {
 }
 
 fn main() -> Result<()> {
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv.get(1).is_some_and(|a| a == "hook") {
+        run_hook(hook_claude_dir(&argv[2..]));
+        return Ok(());
+    }
     match Cli::parse().cmd {
-        Cmd::Hook { claude_dir, .. } => run_hook(claude_dir),
+        Cmd::Hook => {}
         Cmd::List {
             json,
             all,

@@ -97,8 +97,10 @@ fn json_hides_exited_by_default() {
 }
 
 fn hook_cmd(dir: &std::path::Path, stdin: &str, extra: &[&str]) -> std::process::Output {
+    let home = tempfile::tempdir().unwrap();
     Command::cargo_bin("av")
         .unwrap()
+        .env("HOME", home.path())
         .args(["hook", "--agent-viewer"])
         .args(extra)
         .arg("--claude-dir")
@@ -124,8 +126,10 @@ fn hook_appends_one_line() {
 #[test]
 fn hook_ignores_unknown_args() {
     let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
     let out = Command::cargo_bin("av")
         .unwrap()
+        .env("HOME", home.path())
         .args([
             "hook",
             "--agent-viewer",
@@ -134,6 +138,23 @@ fn hook_ignores_unknown_args() {
             "--claude-dir",
         ])
         .arg(dir.path())
+        .write_stdin("garbage")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let text = std::fs::read_to_string(dir.path().join("agent-viewer/events.jsonl")).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    assert!(!home.path().join(".claude").exists());
+}
+
+#[test]
+fn hook_missing_value_is_silent() {
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::cargo_bin("av")
+        .unwrap()
+        .env("HOME", home.path())
+        .args(["hook", "--claude-dir"])
         .write_stdin("garbage")
         .output()
         .unwrap();
