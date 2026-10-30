@@ -319,12 +319,6 @@ impl Engine {
         self.rebuild_all(now)
     }
 
-    /// Overrides the detected install time (tests; callers that know better
-    /// than the settings file's mtime).
-    pub fn set_hooks_since(&mut self, since: Option<DateTime<Utc>>) {
-        self.hooks_since = since;
-    }
-
     /// The last emitted agents, sorted by id.
     pub fn agents(&self) -> Vec<Agent> {
         let mut out: Vec<Agent> = self
