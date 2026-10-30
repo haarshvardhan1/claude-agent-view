@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { AgentList } from "./components/AgentList";
 import { DetailPanel } from "./components/DetailPanel";
+import { HooksBanner } from "./components/HooksBanner";
+import { SettingsView } from "./components/SettingsView";
+import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { call, on } from "./lib/ipc";
 import { useStore } from "./store";
@@ -40,6 +43,7 @@ function MainWindow() {
 
   return (
     <div className="flex h-screen flex-col bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <HooksBanner />
       <Toolbar now={now} />
       <div className="flex min-h-0 flex-1">
         <div className="w-[420px] shrink-0 border-r border-gray-200 dark:border-gray-800">
@@ -49,13 +53,14 @@ function MainWindow() {
           <DetailPanel />
         </div>
       </div>
+      <Toasts />
     </div>
   );
 }
 
 function App() {
   if (window.location.hash === "#settings") {
-    return <h1 className="p-6 text-xl font-semibold">Settings</h1>;
+    return <SettingsView />;
   }
   return <MainWindow />;
 }

@@ -2,7 +2,17 @@ import { create } from "zustand";
 import { call } from "./lib/ipc";
 import type { Agent, Change, Filter, GroupBy, Selection } from "./types";
 
+export interface Toast {
+  id: number;
+  message: string;
+}
+
+let toastSeq = 0;
+
 interface State {
+  toasts: Toast[];
+  pushToast: (message: string) => void;
+  dismissToast: (id: number) => void;
   agents: Record<string, Agent>;
   selected: Selection;
   filter: Filter;
@@ -19,6 +29,13 @@ interface State {
 }
 
 export const useStore = create<State>((set) => ({
+  toasts: [],
+  pushToast: (message) => {
+    const id = ++toastSeq;
+    set((s) => ({ toasts: [...s.toasts, { id, message }] }));
+    setTimeout(() => useStore.getState().dismissToast(id), 5000);
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   agents: {},
   selected: null,
   filter: "all",

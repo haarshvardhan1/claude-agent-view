@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Thin wrapper so tests can `vi.mock("../lib/ipc")`. */
 export function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -15,4 +15,9 @@ export function on<T>(event: string, handler: (payload: T) => void): Promise<() 
 /** Reveal a folder in Finder (wrapped so tests can mock it). */
 export function revealInFinder(path: string): Promise<void> {
   return revealItemInDir(path);
+}
+
+/** Open a URL with the system handler (scoped by the opener capability). */
+export function openExternal(url: string): Promise<void> {
+  return openUrl(url);
 }
