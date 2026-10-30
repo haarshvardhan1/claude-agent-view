@@ -8,8 +8,9 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 const TITLE_MAX_CHARS: usize = 80;
 const SYNTHETIC_MODEL: &str = "<synthetic>";
@@ -34,7 +35,7 @@ pub struct PendingTool {
     pub since: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct TranscriptSummary {
     pub title: Option<String>,
     pub git_branch: Option<String>,
@@ -46,6 +47,12 @@ pub struct TranscriptSummary {
     pub handed_back: bool,
     pub tokens: TokenTotals,
     pub skipped_lines: usize,
+    pub agent_name: Option<String>,
+    /// input + cache_creation + cache_read of the last non-synthetic assistant usage.
+    pub context_used: Option<u64>,
+    pub max_context_used: u64,
+    pub turn_ended_at: Option<DateTime<Utc>>,
+    pub last_error_kind: Option<String>,
 }
 
 /// Text of a user message if it is a plain prompt (string content, or a list
@@ -78,147 +85,260 @@ fn usage_totals(u: &Value) -> TokenTotals {
     }
 }
 
-pub fn summarize_transcript(path: &Path) -> std::io::Result<TranscriptSummary> {
-    let mut reader = BufReader::new(File::open(path)?);
-    let mut s = TranscriptSummary::default();
-    let mut ai_title: Option<String> = None;
-    let mut first_prompt: Option<String> = None;
-    let mut open: Vec<(String, String, DateTime<Utc>)> = Vec::new(); // (id, name, since)
-    let mut usage_by_msg: HashMap<String, TokenTotals> = HashMap::new();
+/// Incremental per-line state behind [`TranscriptSummary`].
+#[derive(Debug, Clone, Default)]
+pub struct SummaryState {
+    s: TranscriptSummary,
+    ai_title: Option<String>,
+    first_prompt: Option<String>,
+    open: Vec<(String, String, DateTime<Utc>)>, // (id, name, since)
+    usage_by_msg: HashMap<String, TokenTotals>,
+}
 
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        if reader.read_until(b'\n', &mut buf)? == 0 {
-            break;
-        }
-        let line = String::from_utf8_lossy(&buf);
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+impl SummaryState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn apply_line(&mut self, line: &str) {
+    let s = &mut self.s;
         let Ok(rec) = serde_json::from_str::<Value>(line) else {
-            s.skipped_lines += 1;
-            continue;
-        };
-        let rtype = rec.get("type").and_then(Value::as_str).unwrap_or("");
+    s.skipped_lines += 1;
+        return;
+    };
+    let rtype = rec.get("type").and_then(Value::as_str).unwrap_or("");
 
-        if rtype == "ai-title" {
-            if let Some(t) = rec.get("aiTitle").and_then(Value::as_str) {
-                ai_title = Some(t.to_string());
-            }
-            continue;
+    if rtype == "agent-name" {
+        if let Some(n) = rec.get("agentName").and_then(Value::as_str) {
+            s.agent_name = Some(n.to_string());
         }
-        if !matches!(rtype, "user" | "assistant" | "system") {
-            continue;
+        return;
+    }
+    if rtype == "ai-title" {
+        if let Some(t) = rec.get("aiTitle").and_then(Value::as_str) {
+            self.ai_title = Some(t.to_string());
         }
+        return;
+    }
+    if !matches!(rtype, "user" | "assistant" | "system") {
+        return;
+    }
 
-        let ts = rec
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map(|t| t.with_timezone(&Utc));
-        if let Some(t) = ts {
-            s.last_activity = Some(t);
-        }
-        if let Some(b) = rec.get("gitBranch").and_then(Value::as_str) {
-            s.git_branch = Some(b.to_string());
-        }
+    let ts = rec
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&Utc));
+    if let Some(t) = ts {
+        s.last_activity = Some(t);
+    }
+    if let Some(b) = rec.get("gitBranch").and_then(Value::as_str) {
+        s.git_branch = Some(b.to_string());
+    }
 
-        let msg = rec.get("message");
-        // System records other than level=error (e.g. the turn_duration record
-        // written after every turn) leave the flag unchanged.
-        match rtype {
-            "system" => {
-                if rec.get("level").and_then(Value::as_str) == Some("error") {
-                    s.last_is_error = true;
+    let msg = rec.get("message");
+    // System records other than level=error (e.g. the turn_duration record
+    // written after every turn) leave the flag unchanged.
+    match rtype {
+        "system" => {
+            if rec.get("level").and_then(Value::as_str) == Some("error") {
+                s.last_is_error = true;
+            }
+            if rec.get("subtype").and_then(Value::as_str) == Some("turn_duration") {
+                if let Some(t) = ts {
+                    s.turn_ended_at = Some(t);
                 }
             }
-            "assistant" => {
-                s.last_is_error =
-                    rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
-            }
-            _ => s.last_is_error = false,
         }
-
-        match rtype {
-            "assistant" => {
-                let Some(msg) = msg else { continue };
-                let synthetic = msg.get("model").and_then(Value::as_str) == Some(SYNTHETIC_MODEL);
-                if !synthetic {
-                    if let Some(m) = msg.get("model").and_then(Value::as_str) {
-                        s.model = Some(m.to_string());
-                    }
-                    if let Some(r) = msg.get("stop_reason").and_then(Value::as_str) {
-                        s.last_stop_reason = Some(r.to_string());
-                    }
-                    if let (Some(id), Some(u)) =
-                        (msg.get("id").and_then(Value::as_str), msg.get("usage"))
-                    {
-                        usage_by_msg.insert(id.to_string(), usage_totals(u));
-                    }
-                }
-                if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
-                    for b in blocks {
-                        if b.get("type").and_then(Value::as_str) != Some("tool_use") {
-                            continue;
-                        }
-                        let name = b.get("name").and_then(Value::as_str).unwrap_or("");
-                        if name == "SubagentHandback" {
-                            s.handed_back = true;
-                        }
-                        if let (Some(id), Some(t)) = (b.get("id").and_then(Value::as_str), ts) {
-                            open.push((id.to_string(), name.to_string(), t));
-                        }
-                    }
-                }
-            }
-            "user" => {
-                let Some(msg) = msg else { continue };
-                // tool_result blocks close their tool but are not prompts.
-                if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
-                    for b in blocks {
-                        if b.get("type").and_then(Value::as_str) == Some("tool_result") {
-                            if let Some(id) = b.get("tool_use_id").and_then(Value::as_str) {
-                                open.retain(|(oid, _, _)| oid != id);
-                            }
-                        }
-                    }
-                }
-                let is_meta = rec.get("isMeta").and_then(Value::as_bool) == Some(true);
-                let has_tool_result = msg
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .is_some_and(|bs| {
-                        bs.iter()
-                            .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-                    });
-                if is_meta || has_tool_result {
-                    continue;
-                }
-                if let Some(text) = user_text(msg) {
-                    if text.trim_start().starts_with('<') {
-                        continue;
-                    }
-                    open.clear();
-                    if first_prompt.is_none() {
-                        first_prompt = title_from(text);
-                    }
-                }
-            }
-            _ => {}
+        "assistant" => {
+            s.last_is_error = rec.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
+            s.last_error_kind = if s.last_is_error {
+                rec.get("error").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            };
+        }
+        _ => {
+            s.last_is_error = false;
+            s.last_error_kind = None;
         }
     }
 
-    s.title = ai_title.or(first_prompt).filter(|t| !t.is_empty());
-    s.pending_tool = open
-        .pop()
-        .map(|(_, name, since)| PendingTool { name, since });
-    for t in usage_by_msg.values() {
-        s.tokens.input += t.input;
-        s.tokens.output += t.output;
-        s.tokens.cache_read += t.cache_read;
-        s.tokens.cache_write += t.cache_write;
+    match rtype {
+        "assistant" => {
+            let Some(msg) = msg else { return };
+            let synthetic = msg.get("model").and_then(Value::as_str) == Some(SYNTHETIC_MODEL);
+            if !synthetic {
+                if let Some(m) = msg.get("model").and_then(Value::as_str) {
+                    s.model = Some(m.to_string());
+                }
+                if let Some(r) = msg.get("stop_reason").and_then(Value::as_str) {
+                    s.last_stop_reason = Some(r.to_string());
+                }
+                if let (Some(id), Some(u)) =
+                    (msg.get("id").and_then(Value::as_str), msg.get("usage"))
+                {
+                    self.usage_by_msg.insert(id.to_string(), usage_totals(u));
+                }
+                if let Some(u) = msg.get("usage") {
+                    let t = usage_totals(u);
+                    let ctx = t.input + t.cache_write + t.cache_read;
+                    s.context_used = Some(ctx);
+                    s.max_context_used = s.max_context_used.max(ctx);
+                }
+            }
+            if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
+                for b in blocks {
+                    if b.get("type").and_then(Value::as_str) != Some("tool_use") {
+                        return;
+                    }
+                    let name = b.get("name").and_then(Value::as_str).unwrap_or("");
+                    if name == "SubagentHandback" {
+                        s.handed_back = true;
+                    }
+                    if let (Some(id), Some(t)) = (b.get("id").and_then(Value::as_str), ts) {
+                        self.open.push((id.to_string(), name.to_string(), t));
+                    }
+                }
+            }
+        }
+        "user" => {
+            let Some(msg) = msg else { return };
+            // tool_result blocks close their tool but are not prompts.
+            if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
+                for b in blocks {
+                    if b.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        if let Some(id) = b.get("tool_use_id").and_then(Value::as_str) {
+                            self.open.retain(|(oid, _, _)| oid != id);
+                        }
+                    }
+                }
+            }
+            let is_meta = rec.get("isMeta").and_then(Value::as_bool) == Some(true);
+            let has_tool_result = msg
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|bs| {
+                    bs.iter()
+                        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+                });
+            if is_meta || has_tool_result {
+                return;
+            }
+            if let Some(text) = user_text(msg) {
+                if text.trim_start().starts_with('<') {
+                    return;
+                }
+                self.open.clear();
+                if self.first_prompt.is_none() {
+                    self.first_prompt = title_from(text);
+                }
+            }
+        }
+        _ => {}
     }
-    Ok(s)
+    }
+
+    pub fn summary(&self) -> TranscriptSummary {
+        let mut s = self.s.clone();
+        s.title = self
+            .ai_title
+            .clone()
+            .or_else(|| self.first_prompt.clone())
+            .filter(|t| !t.is_empty());
+        s.pending_tool = self.open.last().map(|(_, name, since)| PendingTool {
+            name: name.clone(),
+            since: *since,
+        });
+        for t in self.usage_by_msg.values() {
+            s.tokens.input += t.input;
+            s.tokens.output += t.output;
+            s.tokens.cache_read += t.cache_read;
+            s.tokens.cache_write += t.cache_write;
+        }
+        s
+    }
+}
+
+/// Reads a transcript incrementally: only bytes appended since the last call
+/// are parsed. A changed inode or a shorter file resets all state.
+#[derive(Debug)]
+pub struct TranscriptTail {
+    path: PathBuf,
+    state: SummaryState,
+    offset: u64,
+    inode: Option<u64>,
+    carry: Vec<u8>,
+}
+
+impl TranscriptTail {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            state: SummaryState::new(),
+            offset: 0,
+            inode: None,
+            carry: Vec::new(),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn summary(&self) -> TranscriptSummary {
+        self.state.summary()
+    }
+
+    /// Returns true if any complete line was applied or a reset happened.
+    pub fn read_new(&mut self) -> std::io::Result<bool> {
+        let mut file = File::open(&self.path)?;
+        let meta = file.metadata()?;
+        let (ino, len) = (meta.ino(), meta.len());
+        let mut changed = false;
+        if self.inode.is_some_and(|i| i != ino) || len < self.offset {
+            self.state = SummaryState::new();
+            self.offset = 0;
+            self.carry.clear();
+            changed = true;
+        }
+        self.inode = Some(ino);
+
+        file.seek(SeekFrom::Start(self.offset))?;
+        let mut new = Vec::new();
+        file.read_to_end(&mut new)?;
+        self.offset += new.len() as u64;
+
+        let mut data = std::mem::take(&mut self.carry);
+        data.extend_from_slice(&new);
+        let end = data.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        for raw in data[..end].split(|&b| b == b'\n') {
+            let line = String::from_utf8_lossy(raw);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            self.state.apply_line(line);
+            changed = true;
+        }
+        self.carry = data[end..].to_vec();
+        Ok(changed)
+    }
+}
+
+pub fn summarize_transcript(path: &Path) -> std::io::Result<TranscriptSummary> {
+    let mut tail = TranscriptTail::new(path.to_path_buf());
+    tail.read_new()?;
+    // A one-shot read also counts a final line that has no trailing newline.
+    let mut state = tail.state.clone();
+    let line = String::from_utf8_lossy(&tail.carry);
+    let line = line.trim();
+    if !line.is_empty() {
+        state.apply_line(line);
+    }
+    Ok(state.summary())
 }

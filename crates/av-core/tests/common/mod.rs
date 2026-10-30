@@ -163,3 +163,48 @@ pub fn write_subagent(transcript: &Path, id: &str, lines: &[String], meta: Optio
         fs::write(dir.join(format!("agent-{id}.meta.json")), m).unwrap();
     }
 }
+
+// ---- tail builders ----
+
+pub fn agent_name(name: &str) -> String {
+    serde_json::json!({"type": "agent-name", "agentName": name, "sessionId": "s"}).to_string()
+}
+
+pub fn assistant_text_cached(
+    msg_id: &str,
+    i: u64,
+    o: u64,
+    cache_write: u64,
+    cache_read: u64,
+    model: &str,
+    ts: &str,
+) -> String {
+    serde_json::json!({
+        "type": "assistant", "timestamp": ts, "gitBranch": "main",
+        "message": {
+            "id": msg_id, "model": model, "role": "assistant",
+            "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": i, "output_tokens": o,
+                "cache_creation_input_tokens": cache_write,
+                "cache_read_input_tokens": cache_read,
+            },
+        },
+    })
+    .to_string()
+}
+
+pub fn assistant_api_error_kind(kind: &str, ts: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "isApiErrorMessage": true, "error": kind,
+        "timestamp": ts,
+        "message": {
+            "id": "synthetic", "model": "<synthetic>", "role": "assistant",
+            "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "error"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
+    .to_string()
+}

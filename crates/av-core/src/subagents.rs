@@ -65,6 +65,6 @@ pub fn read_subagents(transcript: &Path, parent_alive: bool) -> Vec<SubagentInfo
             })
         })
         .collect();
-    out.sort_by(|a, b| b.summary.last_activity.cmp(&a.summary.last_activity));
+    out.sort_by_key(|o| std::cmp::Reverse(o.summary.last_activity));
     out
 }
