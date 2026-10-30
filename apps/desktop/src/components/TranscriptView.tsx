@@ -99,7 +99,15 @@ export function TranscriptView({ agentId, subagentId }: { agentId: string; subag
   }, [t.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (t.notFound) {
-    return <div className="p-4 text-sm text-gray-500">This session is no longer available</div>;
+    const gone =
+      !changeKey ||
+      changeKey.status.kind === "exited" ||
+      (subagentId !== undefined && !changeKey.subagents.some((s) => s.id === subagentId));
+    return (
+      <div className="p-4 text-sm text-gray-500">
+        {gone ? "This session is no longer available" : "No transcript yet"}
+      </div>
+    );
   }
   if (t.loading) return <div className="p-4 text-sm text-gray-500">Loading…</div>;
   if (!t.view) {

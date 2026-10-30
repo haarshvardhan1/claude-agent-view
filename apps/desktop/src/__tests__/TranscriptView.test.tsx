@@ -196,10 +196,57 @@ describe("TranscriptView", () => {
     expect(screen.getByText("from a2")).toBeInTheDocument();
   });
 
-  it("shows a note on notFound", async () => {
+  it("shows 'no longer available' on notFound for an exited agent", async () => {
+    useStore.setState({ agents: { a1: mkAgent({ id: "a1", status: { kind: "exited" } }) } });
     mockCall.mockImplementation((() => Promise.reject({ code: "notFound", message: "gone" })) as typeof call);
     render(<DetailPanel />);
     expect(await screen.findByText("This session is no longer available")).toBeInTheDocument();
+  });
+
+  it("shows 'No transcript yet' on notFound for a live agent without a transcript", async () => {
+    mockCall.mockImplementation((() => Promise.reject({ code: "notFound", message: "gone" })) as typeof call);
+    render(<DetailPanel />);
+    expect(await screen.findByText("No transcript yet")).toBeInTheDocument();
+    expect(screen.queryByText("This session is no longer available")).toBeNull();
+  });
+
+  it("refetches the tail after notFound when the agent updates with a transcriptPath", async () => {
+    let exists = false;
+    mockCall.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd !== "get_transcript") return Promise.resolve();
+      if (!exists) return Promise.reject({ code: "notFound", message: "no transcript" });
+      const req = args!.req as Req;
+      return Promise.resolve(req.kind === "tail" ? page([user("first prompt"), asst("reply")], 0, 30) : page([], 30, 30));
+    }) as typeof call);
+    render(<DetailPanel />);
+    expect(await screen.findByText("No transcript yet")).toBeInTheDocument();
+    exists = true;
+    act(() => {
+      useStore.getState().apply([
+        { type: "agentUpdated", agent: mkAgent({ id: "a1", transcriptPath: "/p/a1.jsonl" }) },
+      ]);
+    });
+    expect(await screen.findByText("first prompt")).toBeInTheDocument();
+    expect(screen.getByText("reply")).toBeInTheDocument();
+    expect(screen.queryByText("No transcript yet")).toBeNull();
+    const tails = mockCall.mock.calls.filter((c) => (c[1] as { req: Req }).req.kind === "tail");
+    expect(tails).toHaveLength(2);
+    expect(afterCalls()).toEqual([]);
+  });
+
+  it("an update while the first tail is in flight does not start a second tail", async () => {
+    let release: (p: TranscriptPage) => void = () => {};
+    setup((_, req) =>
+      req.kind === "tail" ? new Promise<TranscriptPage>((r) => (release = r)) : page([asst("more")], 10, 20),
+    );
+    render(<DetailPanel />);
+    await flush();
+    bump();
+    await act(async () => release(page([asst("one")], 0, 10)));
+    await screen.findByText("more");
+    const tails = mockCall.mock.calls.filter((c) => (c[1] as { req: Req }).req.kind === "tail");
+    expect(tails).toHaveLength(1);
+    expect(afterCalls()).toEqual([{ kind: "after", offset: 10 }]);
   });
 
   it("header shows details and reveals folder", async () => {

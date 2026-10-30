@@ -62,6 +62,8 @@ const errMsg = (e: unknown): string =>
 interface Ctl {
   inflight: boolean;
   dirty: boolean;
+  /** A tail fetch is in flight. */
+  tail: boolean;
 }
 
 /**
@@ -83,7 +85,7 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
   // Bumped on every view replace and reset; drops stale `before` pages.
   const epochRef = useRef(0);
   const earlierBusy = useRef(false);
-  const ctlRef = useRef<Ctl>({ inflight: false, dirty: false });
+  const ctlRef = useRef<Ctl>({ inflight: false, dirty: false, tail: false });
   const commit = useCallback((patch: Partial<TranscriptState>) => {
     stateRef.current = { ...stateRef.current, ...patch, seq: stateRef.current.seq + 1 };
     setState(stateRef.current);
@@ -154,12 +156,47 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
     [fetchPage, commit, fail],
   );
 
+  // Loads the tail into an empty view (first load, or a retry after notFound).
+  const loadTail = useCallback(
+    (tok: number, ctl: Ctl) => {
+      ctl.tail = true;
+      fetchPage({ kind: "tail" })
+        .then((page) => {
+          if (tok !== tokenRef.current) return;
+          ctl.tail = false;
+          const n = normalize(page.entries, {});
+          epochRef.current++;
+          commit({
+            view: {
+              entries: n.entries,
+              startOffset: page.startOffset,
+              endOffset: page.endOffset,
+              hasMore: page.startOffset > 0,
+              pending: n.pending,
+            },
+            loading: false,
+            notFound: false,
+            error: null,
+            op: "replace",
+          });
+          if (ctl.dirty) void runAfter(tok, ctl);
+        })
+        .catch((e) => {
+          if (tok !== tokenRef.current) return;
+          ctl.tail = false;
+          ctl.dirty = false;
+          fail(e);
+        });
+    },
+    [fetchPage, commit, fail, runAfter],
+  );
+
   // Selection change: reset and load the tail.
   useEffect(() => {
     const tok = ++tokenRef.current;
     epochRef.current++;
     earlierBusy.current = false;
-    const ctl: Ctl = { inflight: false, dirty: false };
+    const ctl: Ctl = { inflight: false, dirty: false, tail: false };
     ctlRef.current = ctl;
     stateRef.current = {
       view: null,
@@ -171,27 +208,8 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
       seq: stateRef.current.seq + 1,
     };
     setState(stateRef.current);
-    fetchPage({ kind: "tail" })
-      .then((page) => {
-        if (tok !== tokenRef.current) return;
-        const n = normalize(page.entries, {});
-        commit({
-          view: {
-            entries: n.entries,
-            startOffset: page.startOffset,
-            endOffset: page.endOffset,
-            hasMore: page.startOffset > 0,
-            pending: n.pending,
-          },
-          loading: false,
-          op: "replace",
-        });
-        if (ctl.dirty) void runAfter(tok, ctl);
-      })
-      .catch((e) => {
-        if (tok === tokenRef.current) fail(e);
-      });
-  }, [fetchPage, commit, fail, runAfter]);
+    loadTail(tok, ctl);
+  }, [loadTail]);
 
   // Live updates: the selected agent changed.
   const seenSel = useRef(`${agentId}|${subagentId ?? ""}`);
@@ -206,11 +224,17 @@ export function useTranscript(agentId: string, subagentId: string | undefined, c
     }
     const ctl = ctlRef.current;
     if (!stateRef.current.view) {
-      ctl.dirty = true; // tail still loading; refetch after it lands
+      if (ctl.tail) {
+        ctl.dirty = true; // tail still loading; refetch after it lands
+      } else {
+        // No view yet (e.g. notFound: the session appeared before its
+        // transcript file): try the tail again.
+        loadTail(tokenRef.current, ctl);
+      }
       return;
     }
     void runAfter(tokenRef.current, ctl);
-    // runAfter intentionally omitted: it only changes with the selection.
+    // runAfter/loadTail intentionally omitted: they only change with the selection.
   }, [changeKey, agentId, subagentId]);
 
   const loadEarlier = useCallback(async () => {
