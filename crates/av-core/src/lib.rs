@@ -13,3 +13,4 @@ pub use liveness::SystemProbe;
 pub use scan::{scan, Agent, ScanResult};
 pub use status::AgentStatus;
 pub mod view;
+pub mod engine;

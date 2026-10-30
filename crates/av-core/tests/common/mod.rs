@@ -208,3 +208,50 @@ pub fn assistant_api_error_kind(kind: &str, ts: &str) -> String {
     })
     .to_string()
 }
+
+// ---- shared, mutable probe (engine tests) ----
+
+use av_core::liveness::ProbeError;
+use std::sync::{Arc, Mutex};
+
+/// A probe whose running pids and failure mode can be changed after it is
+/// handed to the engine. Overrides `check` so it can report probe errors.
+#[derive(Clone, Default)]
+pub struct SharedProbe(pub Arc<Mutex<SharedProbeState>>);
+
+#[derive(Default)]
+pub struct SharedProbeState {
+    pub procs: HashMap<u32, String>,
+    pub fail: bool,
+}
+
+pub const PROC_START: &str = "Thu Oct 29 12:36:53 2026";
+
+impl SharedProbe {
+    pub fn set_running(&self, pid: u32, running: bool) {
+        let mut s = self.0.lock().unwrap();
+        if running {
+            s.procs.insert(pid, PROC_START.to_string());
+        } else {
+            s.procs.remove(&pid);
+        }
+    }
+
+    pub fn set_fail(&self, fail: bool) {
+        self.0.lock().unwrap().fail = fail;
+    }
+}
+
+impl ProcessProbe for SharedProbe {
+    fn proc_start(&self, pid: u32) -> Option<String> {
+        self.0.lock().unwrap().procs.get(&pid).cloned()
+    }
+
+    fn check(&self, pid: u32) -> Result<Option<String>, ProbeError> {
+        let s = self.0.lock().unwrap();
+        if s.fail {
+            return Err(ProbeError("ps failed".into()));
+        }
+        Ok(s.procs.get(&pid).cloned())
+    }
+}
