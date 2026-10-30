@@ -6,6 +6,8 @@ pub mod subagents;
 pub mod status;
 pub mod scan;
 pub mod model;
+pub mod hooks;
+mod tailio;
 
 pub use liveness::SystemProbe;
 pub use scan::{scan, Agent, ScanResult};

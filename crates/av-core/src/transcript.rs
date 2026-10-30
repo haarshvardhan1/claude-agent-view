@@ -3,13 +3,11 @@
 //! Transcripts can be tens of MB, so the file is read one line at a time and
 //! never held in memory as a whole.
 
+use crate::tailio::{read_appended, TailPos};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const TITLE_MAX_CHARS: usize = 80;
@@ -268,9 +266,7 @@ impl SummaryState {
 pub struct TranscriptTail {
     path: PathBuf,
     state: SummaryState,
-    offset: u64,
-    inode: Option<u64>,
-    carry: Vec<u8>,
+    pos: TailPos,
 }
 
 impl TranscriptTail {
@@ -278,9 +274,7 @@ impl TranscriptTail {
         Self {
             path,
             state: SummaryState::new(),
-            offset: 0,
-            inode: None,
-            carry: Vec::new(),
+            pos: TailPos::default(),
         }
     }
 
@@ -289,7 +283,7 @@ impl TranscriptTail {
     }
 
     pub fn offset(&self) -> u64 {
-        self.offset
+        self.pos.offset
     }
 
     pub fn summary(&self) -> TranscriptSummary {
@@ -298,36 +292,15 @@ impl TranscriptTail {
 
     /// Returns true if any complete line was applied or a reset happened.
     pub fn read_new(&mut self) -> std::io::Result<bool> {
-        let mut file = File::open(&self.path)?;
-        let meta = file.metadata()?;
-        let (ino, len) = (meta.ino(), meta.len());
-        let mut changed = false;
-        if self.inode.is_some_and(|i| i != ino) || len < self.offset {
+        let (lines, reset) = read_appended(&self.path, &mut self.pos)?;
+        let mut changed = reset;
+        if reset {
             self.state = SummaryState::new();
-            self.offset = 0;
-            self.carry.clear();
-            changed = true;
         }
-        self.inode = Some(ino);
-
-        file.seek(SeekFrom::Start(self.offset))?;
-        let mut new = Vec::new();
-        file.read_to_end(&mut new)?;
-        self.offset += new.len() as u64;
-
-        let mut data = std::mem::take(&mut self.carry);
-        data.extend_from_slice(&new);
-        let end = data.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-        for raw in data[..end].split(|&b| b == b'\n') {
-            let line = String::from_utf8_lossy(raw);
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
+        for line in &lines {
             self.state.apply_line(line);
             changed = true;
         }
-        self.carry = data[end..].to_vec();
         Ok(changed)
     }
 }
@@ -337,7 +310,7 @@ pub fn summarize_transcript(path: &Path) -> std::io::Result<TranscriptSummary> {
     tail.read_new()?;
     // A one-shot read also counts a final line that has no trailing newline.
     let mut state = tail.state.clone();
-    let line = String::from_utf8_lossy(&tail.carry);
+    let line = String::from_utf8_lossy(&tail.pos.carry);
     let line = line.trim();
     if !line.is_empty() {
         state.apply_line(line);
