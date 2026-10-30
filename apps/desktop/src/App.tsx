@@ -1,29 +1,63 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { AgentList } from "./components/AgentList";
+import { DetailPanel } from "./components/DetailPanel";
+import { Toolbar } from "./components/Toolbar";
+import { call, on } from "./lib/ipc";
+import { useStore } from "./store";
+import type { Agent, AppSettings, Change } from "./types";
 
-export function AgentCount({ count }: { count: number | null }) {
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+}
+
+function MainWindow() {
+  const now = useNow();
+  const [claudeDir, setClaudeDir] = useState("~/.claude");
+
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten: (() => void)[] = [];
+    const { setAll, apply, select } = useStore.getState();
+    // Subscribe first so no change is missed while the initial list loads.
+    on<Change[]>("agents://changed", apply).then((u) => (cancelled ? u() : unlisten.push(u)));
+    on<string>("ui://select-agent", (id) => select({ agentId: id })).then((u) =>
+      cancelled ? u() : unlisten.push(u),
+    );
+    call<Agent[]>("list_agents").then(setAll).catch(() => {});
+    call<AppSettings>("get_settings")
+      .then((s) => s.claudeDir && setClaudeDir(s.claudeDir))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten.forEach((u) => u());
+    };
+  }, []);
+
   return (
-    <p className="text-sm text-gray-600">
-      {count === null ? "Loading agents…" : `${count} agent${count === 1 ? "" : "s"}`}
-    </p>
+    <div className="flex h-screen flex-col bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <Toolbar now={now} />
+      <div className="flex min-h-0 flex-1">
+        <div className="w-[420px] shrink-0 border-r border-gray-200 dark:border-gray-800">
+          <AgentList now={now} claudeDir={claudeDir} />
+        </div>
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          <DetailPanel />
+        </div>
+      </div>
+    </div>
   );
 }
 
 function App() {
-  const [count, setCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    invoke<unknown[]>("list_agents")
-      .then((agents) => setCount(agents.length))
-      .catch(() => setCount(0));
-  }, []);
-
-  return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold">Agent Viewer</h1>
-      <AgentCount count={count} />
-    </main>
-  );
+  if (window.location.hash === "#settings") {
+    return <h1 className="p-6 text-xl font-semibold">Settings</h1>;
+  }
+  return <MainWindow />;
 }
 
 export default App;
