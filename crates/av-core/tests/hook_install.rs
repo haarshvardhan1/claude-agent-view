@@ -222,3 +222,42 @@ fn path_with_spaces_runs() {
     assert!(st.success());
     assert!(dir.join("ran").exists());
 }
+
+#[test]
+fn uninstall_preserves_key_order() {
+    let d = tempfile::tempdir().unwrap();
+    let s = d.path().join("settings.json");
+    let orig = r#"{"model":"x","hooks":{"Notification":[{"matcher":"","hooks":[{"type":"command","command":"mine"}]}],"PreToolUse":[]},"zeta":1,"permissions":{}}"#;
+    fs::write(&s, orig).unwrap();
+    let av = fake_av(d.path(), "av");
+    install(&s, &av, t(14)).unwrap();
+    uninstall(&s, t(15)).unwrap();
+    let v: Value = serde_json::from_str(&fs::read_to_string(&s).unwrap()).unwrap();
+    let top: Vec<&String> = v.as_object().unwrap().keys().collect();
+    assert_eq!(top, ["model", "hooks", "zeta", "permissions"]);
+    let ev: Vec<&String> = v["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(ev, ["Notification", "PreToolUse"]);
+
+    // fully emptied `hooks` removal must not reorder siblings either
+    fs::write(&s, r#"{"model":"x","hooks":{},"zeta":1,"permissions":{}}"#).unwrap();
+    install(&s, &av, t(16)).unwrap();
+    uninstall(&s, t(17)).unwrap();
+    let v: Value = serde_json::from_str(&fs::read_to_string(&s).unwrap()).unwrap();
+    let top: Vec<&String> = v.as_object().unwrap().keys().collect();
+    assert_eq!(top, ["model", "zeta", "permissions"]);
+}
+
+#[test]
+fn file_mode_preserved() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let s = d.path().join("settings.json");
+    fs::write(&s, r#"{"env":{"K":"secret"}}"#).unwrap();
+    fs::set_permissions(&s, fs::Permissions::from_mode(0o600)).unwrap();
+    let av = fake_av(d.path(), "av");
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    install(&s, &av, t(18)).unwrap();
+    assert_eq!(mode(&s), 0o600);
+    uninstall(&s, t(19)).unwrap();
+    assert_eq!(mode(&s), 0o600);
+}

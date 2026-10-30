@@ -106,6 +106,12 @@ fn write_atomic(target: &Path, doc: &Map<String, Value>) -> Result<(), HookError
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, text)?;
+    if let Ok(meta) = std::fs::metadata(target) {
+        if let Err(e) = std::fs::set_permissions(&tmp, meta.permissions()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+    }
     if let Err(e) = std::fs::rename(&tmp, target) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
@@ -263,7 +269,7 @@ pub fn uninstall(settings: &Path, now: DateTime<Utc>) -> Result<InstallReport, H
             if strip_markers(groups) {
                 changed = true;
                 if groups.is_empty() {
-                    hooks.remove(ev);
+                    hooks.shift_remove(ev);
                 }
             }
         }
@@ -276,7 +282,7 @@ pub fn uninstall(settings: &Path, now: DateTime<Utc>) -> Result<InstallReport, H
         });
     }
     if hooks_empty {
-        doc.remove("hooks");
+        doc.shift_remove("hooks");
     }
     finish(settings, &target, existed, &doc, now)
 }
