@@ -22,3 +22,19 @@ fn settings_roundtrip_and_defaults() {
     fs::write(dir.join("settings.json"), "{ not json").unwrap();
     assert_eq!(load(dir), AppSettings::default());
 }
+
+#[test]
+fn hook_claude_dir_only_for_non_default_folder() {
+    use desktop_lib::settings::hook_claude_dir;
+    use std::path::{Path, PathBuf};
+    let home = Path::new("/Users/me");
+    assert_eq!(hook_claude_dir(&home.join(".claude"), Some(home)), None);
+    assert_eq!(
+        hook_claude_dir(Path::new("/x/claude"), Some(home)),
+        Some(PathBuf::from("/x/claude"))
+    );
+    assert_eq!(
+        hook_claude_dir(Path::new("/x/claude"), None),
+        Some(PathBuf::from("/x/claude"))
+    );
+}

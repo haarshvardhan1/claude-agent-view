@@ -19,7 +19,7 @@ use av_core::transcript_view::read_page;
 use av_core::watch::{WatchHandle, spawn_watcher};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -65,6 +65,8 @@ fn default_av_path() -> PathBuf {
 
 pub struct Runtime {
     claude_dir: PathBuf,
+    /// `--claude-dir` for the hook command (`None` for the default folder).
+    hook_dir: Option<PathBuf>,
     av_path: PathBuf,
     settings_dir: PathBuf,
     /// Serialises install/uninstall (+ status sync); never held with `engine`.
@@ -84,15 +86,30 @@ pub struct Runtime {
 
 impl Runtime {
     /// Builds the runtime; reads hooks status from `<claude_dir>/settings.json`.
-    /// Writes nothing.
+    /// Writes nothing. `$HOME` decides whether `claude_dir` is the default.
     pub fn new(
         claude_dir: PathBuf,
         settings_dir: PathBuf,
         settings: AppSettings,
         probe: Box<dyn ProcessProbe + Send>,
     ) -> Self {
-        let hooks = hooks_status(&claude_dir.join("settings.json")) == HooksStatus::Installed;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        Self::new_in_home(claude_dir, settings_dir, settings, probe, home.as_deref())
+    }
+
+    /// [`Runtime::new`] with an explicit home folder.
+    pub fn new_in_home(
+        claude_dir: PathBuf,
+        settings_dir: PathBuf,
+        settings: AppSettings,
+        probe: Box<dyn ProcessProbe + Send>,
+        home: Option<&Path>,
+    ) -> Self {
+        let hook_dir = settings::hook_claude_dir(&claude_dir, home);
+        let hooks = hooks_status(&claude_dir.join("settings.json"), hook_dir.as_deref())
+            == HooksStatus::Installed;
         Self {
+            hook_dir,
             hooks_lock: Mutex::new(()),
             loop_tx: Mutex::new(None),
             engine: Mutex::new(Engine::new(claude_dir.clone(), probe, hooks)),
@@ -121,7 +138,7 @@ impl Runtime {
     }
 
     pub fn hooks_status(&self) -> HooksStatus {
-        hooks_status(&self.settings_file())
+        hooks_status(&self.settings_file(), self.hook_dir.as_deref())
     }
 
     /// Routes hook status changes to the loop thread behind `tx` instead of
@@ -140,7 +157,13 @@ impl Runtime {
                 format!("hook helper not found at {}", self.av_path.display()),
             ));
         }
-        let report = install(&self.settings_file(), &self.av_path, now).map_err(hook_err)?;
+        let report = install(
+            &self.settings_file(),
+            &self.av_path,
+            self.hook_dir.as_deref(),
+            now,
+        )
+        .map_err(hook_err)?;
         self.sync_hooks(now);
         Ok(to_report(report))
     }

@@ -252,3 +252,62 @@ fn concurrent_installs_yield_one_marker_per_event() {
         assert_eq!(arr.as_array().unwrap().len(), 1);
     }
 }
+
+/// A non-default Claude folder: the hook command carries `--claude-dir` so
+/// `av hook` writes events where the app reads them.
+#[test]
+fn install_with_override_writes_claude_dir_flag() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let claude = d.path().join("custom claude");
+    fs::create_dir_all(&claude).unwrap();
+    let av = d.path().join("av");
+    fs::write(&av, b"bin").unwrap();
+    let rt = Runtime::new_in_home(
+        claude.clone(),
+        d.path().join("appdata"),
+        AppSettings::default(),
+        Box::new(SharedProbe::default()),
+        Some(&home),
+    )
+    .with_av_path(av.clone());
+    rt.install_hooks(at(1)).unwrap();
+    let text = fs::read_to_string(claude.join("settings.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for ev in ["Notification", "Stop"] {
+        let cmd = v["hooks"][ev][0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(
+            cmd,
+            format!(
+                "\"{}\" hook --agent-viewer --claude-dir \"{}\"",
+                av.display(),
+                claude.display()
+            )
+        );
+    }
+    assert_eq!(rt.hooks_status(), HooksStatus::Installed);
+}
+
+/// The default `$HOME/.claude`: no `--claude-dir` flag.
+#[test]
+fn install_default_dir_has_no_claude_dir_flag() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let claude = home.join(".claude");
+    fs::create_dir_all(&claude).unwrap();
+    let av = d.path().join("av");
+    fs::write(&av, b"bin").unwrap();
+    let rt = Runtime::new_in_home(
+        claude.clone(),
+        d.path().join("appdata"),
+        AppSettings::default(),
+        Box::new(SharedProbe::default()),
+        Some(&home),
+    )
+    .with_av_path(av.clone());
+    rt.install_hooks(at(1)).unwrap();
+    let text = fs::read_to_string(claude.join("settings.json")).unwrap();
+    assert!(!text.contains("--claude-dir"));
+    assert_eq!(text.matches("--agent-viewer").count(), 2);
+    assert_eq!(rt.hooks_status(), HooksStatus::Installed);
+}

@@ -59,3 +59,12 @@ pub fn resolve_claude_dir_with_override(
         _ => resolve_claude_dir(s, home),
     }
 }
+
+/// The `--claude-dir` to put in the hook command: `None` when `claude_dir` is
+/// the default `$HOME/.claude` (where `av hook` writes anyway), else the dir.
+pub fn hook_claude_dir(claude_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    match home {
+        Some(h) if h.join(".claude") == claude_dir => None,
+        _ => Some(claude_dir.to_path_buf()),
+    }
+}

@@ -12,9 +12,17 @@ use std::path::{Path, PathBuf};
 
 pub const MARKER: &str = "--agent-viewer";
 const EVENTS: [&str; 2] = ["Notification", "Stop"];
+const CLAUDE_DIR_FLAG: &str = " --claude-dir \"";
 
-pub fn hook_command(av_path: &Path) -> String {
-    format!("\"{}\" hook {MARKER}", av_path.display())
+/// `"<av>" hook --agent-viewer`, plus ` --claude-dir "<dir>"` when the app
+/// reads a Claude folder other than the default `$HOME/.claude` (so `av hook`
+/// writes its events where the app reads them).
+pub fn hook_command(av_path: &Path, claude_dir: Option<&Path>) -> String {
+    let mut cmd = format!("\"{}\" hook {MARKER}", av_path.display());
+    if let Some(dir) = claude_dir {
+        cmd.push_str(&format!("{CLAUDE_DIR_FLAG}{}\"", dir.display()));
+    }
+    cmd
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -167,7 +175,25 @@ fn path_exists(command: &str) -> bool {
     quoted_path(command).is_some_and(|p| Path::new(p).exists())
 }
 
-pub fn hooks_status(settings: &Path) -> HooksStatus {
+/// The quoted `--claude-dir "<dir>"` of a hook command, if any (`Some("")`
+/// when the flag is present but malformed, so it never matches).
+fn command_claude_dir(command: &str) -> Option<&str> {
+    let (_, rest) = command.split_once(" --claude-dir")?;
+    Some(
+        rest.strip_prefix(" \"")
+            .and_then(|r| r.split('"').next())
+            .unwrap_or(""),
+    )
+}
+
+fn dir_matches(command: &str, claude_dir: Option<&Path>) -> bool {
+    command_claude_dir(command).map(Path::new) == claude_dir
+}
+
+/// `Installed` when both events have our hook, each pointing at an existing
+/// `av` and at `claude_dir` (`None` = no `--claude-dir`, the default folder);
+/// `Broken` when any of ours points elsewhere (Repair rewrites it).
+pub fn hooks_status(settings: &Path, claude_dir: Option<&Path>) -> HooksStatus {
     let Ok(target) = resolve_target(settings) else {
         return HooksStatus::NotInstalled;
     };
@@ -181,7 +207,10 @@ pub fn hooks_status(settings: &Path) -> HooksStatus {
         if cmds.is_empty() {
             all_present = false;
         }
-        if cmds.iter().any(|c| !path_exists(c)) {
+        if cmds
+            .iter()
+            .any(|c| !path_exists(c) || !dir_matches(c, claude_dir))
+        {
             broken = true;
         }
     }
@@ -215,14 +244,16 @@ fn finish(
     })
 }
 
+/// Installs (or repairs) the hooks; `claude_dir` as in [`hook_command`].
 pub fn install(
     settings: &Path,
     av_path: &Path,
+    claude_dir: Option<&Path>,
     now: DateTime<Utc>,
 ) -> Result<InstallReport, HookError> {
     let target = resolve_target(settings)?;
     let (mut doc, existed) = load(&target)?;
-    let command = hook_command(av_path);
+    let command = hook_command(av_path, claude_dir);
 
     let already = EVENTS
         .iter()
