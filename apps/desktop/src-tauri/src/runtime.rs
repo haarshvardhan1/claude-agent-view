@@ -55,12 +55,15 @@ fn hook_err(e: HookError) -> CmdError {
     }
 }
 
-/// `<running exe dir>/av`.
-fn default_av_path() -> PathBuf {
+/// File name of the bundled hook helper (the `av` CLI, renamed; R26).
+pub const SIDECAR_NAME: &str = "av-hook";
+
+/// `<running exe dir>/av-hook`.
+pub fn default_av_path() -> PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|p| p.join("av")))
-        .unwrap_or_else(|| PathBuf::from("av"))
+        .and_then(|e| e.parent().map(|p| p.join(SIDECAR_NAME)))
+        .unwrap_or_else(|| PathBuf::from(SIDECAR_NAME))
 }
 
 pub struct Runtime {

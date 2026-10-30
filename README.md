@@ -16,7 +16,7 @@ npm install
 npm run tauri dev
 ```
 
-`tauri dev` first builds the `av` sidecar (`scripts/build-sidecar.sh`), then starts Vite and the app.
+`tauri dev` first builds the `av` CLI and copies it in as the `av-hook` sidecar (`scripts/build-sidecar.sh`), then starts Vite and the app.
 
 ## Build and ad-hoc sign
 
@@ -31,14 +31,14 @@ The app bundle is written to the workspace target folder:
 target/release/bundle/macos/Agent Viewer.app
 ```
 
-The `av` helper is bundled at `Agent Viewer.app/Contents/MacOS/av`. The build is unsigned. If notifications do not appear, ad-hoc sign it:
+The hook helper is the `av` CLI, bundled as `Agent Viewer.app/Contents/MacOS/av-hook` (a different name so the build never overwrites the CLI's own `target/*/av`). The installed hook command is `".../Contents/MacOS/av-hook" hook --agent-viewer`. The build is unsigned. If notifications do not appear, ad-hoc sign it:
 
 ```sh
 codesign --force --deep -s - "target/release/bundle/macos/Agent Viewer.app"
 codesign -dv "target/release/bundle/macos/Agent Viewer.app"
 ```
 
-Install hooks only from the copy you will keep (for example after moving it to `/Applications`): the hook command stores the full path to `av`. If you move the app afterwards, Settings shows the hooks as broken and offers Repair.
+Install hooks only from the copy you will keep (for example after moving it to `/Applications`): the hook command stores the full path to `av-hook`. If you move the app afterwards, Settings shows the hooks as broken and offers Repair.
 
 ## Tests and bench
 

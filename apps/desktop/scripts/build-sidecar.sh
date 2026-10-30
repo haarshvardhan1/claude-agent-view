@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the `av` CLI and places it where Tauri expects the sidecar:
-# src-tauri/binaries/av-<host triple>. Run from apps/desktop.
+# src-tauri/binaries/av-hook-<host triple>. Named `av-hook` so tauri-build's
+# copy into target/<profile>/ never clobbers the CLI's target/<profile>/av.
+# Run from apps/desktop.
 set -euo pipefail
 
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -10,7 +12,7 @@ triple="$(rustc -vV | sed -n 's/host: //p')"
 
 cargo build --release -p av-cli --manifest-path "$root/Cargo.toml"
 mkdir -p "$here/src-tauri/binaries"
-dest="$here/src-tauri/binaries/av-$triple"
+dest="$here/src-tauri/binaries/av-hook-$triple"
 cp "$root/target/release/av" "$dest"
 chmod 755 "$dest"
 echo "sidecar: $dest"

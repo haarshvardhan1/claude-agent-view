@@ -311,3 +311,11 @@ fn install_default_dir_has_no_claude_dir_flag() {
     assert_eq!(text.matches("--agent-viewer").count(), 2);
     assert_eq!(rt.hooks_status(), HooksStatus::Installed);
 }
+
+/// The bundled helper is `av-hook` next to the app binary (R26), never `av`.
+#[test]
+fn default_hook_helper_is_av_hook() {
+    let p = desktop_lib::runtime::default_av_path();
+    assert_eq!(p.file_name().unwrap(), "av-hook");
+    assert_eq!(desktop_lib::runtime::SIDECAR_NAME, "av-hook");
+}
