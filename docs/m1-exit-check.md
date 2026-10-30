@@ -84,5 +84,7 @@ None of these were checked by the implementer: the app ran only as an unattended
 
 **Hooks on the real `~/.claude`**
 - [ ] Install from the copy of the app you will keep; a backup appears next to `settings.json`.
-- [ ] Uninstall leaves `settings.json` identical to before install (`diff` against the backup).
+- [ ] The installed hook command points at `.../Agent Viewer.app/Contents/MacOS/av-hook` (`hook --agent-viewer`).
+- [ ] Uninstall leaves `settings.json` identical to before install (`diff` against the backup). Note: install and uninstall re-pretty-print `settings.json`, so a byte diff against the backup can differ in formatting (whitespace, indentation) only; compare the parsed JSON (for example `diff <(jq -S . settings.json) <(jq -S . <backup>)`) to confirm the content is the same.
+- [ ] Install hooks while sessions are already running; confirm a pre-existing session still shows waiting?/needs permission on a prompt, and a new session gets hook-driven needs permission.
 - [ ] Moving the app shows hooks as broken; Repair fixes them.
