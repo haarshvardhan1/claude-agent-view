@@ -96,8 +96,10 @@ fn install_writes_entries_and_backup() {
     assert_eq!(text.matches("--agent-viewer").count(), 2);
     assert!(text.contains("\"theme\""));
     assert_eq!(f.rt.hooks_status(), HooksStatus::Installed);
-    assert!(!changes.is_empty());
-    assert_eq!(status(&f.rt), Status::Working);
+    // R25: the session was already running, so it never loaded the hooks;
+    // the heuristic stays on for it.
+    assert!(changes.is_empty());
+    assert_eq!(status(&f.rt), Status::MaybeWaiting);
 }
 
 fn desktop_lib_tick() -> av_core::engine::Input {

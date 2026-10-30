@@ -183,9 +183,131 @@ fn maybe_waiting_after_tick_when_hooks_off() {
     assert_eq!(status_of(&e, "a"), Status::Working);
     let a = one_update(e.handle(Input::Tick, at(7)));
     assert_eq!(a.status, Status::MaybeWaiting);
-    // Installing hooks disables the heuristic.
-    let a = one_update(e.set_hooks_installed(true, at(8)));
+    // Installing hooks does not disable the heuristic for a session that was
+    // already running (it never loaded the hooks; R25).
+    assert!(e.set_hooks_installed(true, at(8)).is_empty());
+    assert_eq!(status_of(&e, "a"), Status::MaybeWaiting);
+}
+
+/// R25 (1): a session started before install, busy with Bash open 6 s, stays
+/// `maybeWaiting` after install.
+#[test]
+fn hooks_inactive_for_session_started_before_install() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    let t = live_session(home, &probe, 100, "a"); // started before at(0)
+    let mut e = engine(home, &probe, false);
+    e.load(at(1));
+    e.set_hooks_installed(true, at(2));
+    append(&t, &assistant_tool_use("m1", "tu1", "Bash", &ts(3)));
+    e.handle(Input::Transcript(t.clone()), at(3));
+    assert_eq!(status_of(&e, "a"), Status::Working);
+    let a = one_update(e.handle(Input::Tick, at(9)));
+    assert_eq!(a.status, Status::MaybeWaiting);
+}
+
+/// R25 (2): the same session after one accepted hook event counts as hooked.
+#[test]
+fn hooks_active_after_session_delivers_event() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    let t = live_session(home, &probe, 100, "a");
+    let mut e = engine(home, &probe, false);
+    e.load(at(1));
+    e.set_hooks_installed(true, at(2));
+    permission_event(home, "a", at(3));
+    let a = one_update(e.handle(Input::Events, at(3)));
+    assert!(matches!(a.status, Status::NeedsPermission { .. }));
+    append(&t, &tool_result("tu0", &ts(4)));
+    append(&t, &assistant_tool_use("m1", "tu1", "Bash", &ts(5)));
+    let a = one_update(e.handle(Input::Transcript(t.clone()), at(5)));
     assert_eq!(a.status, Status::Working);
+    // Bash open 6 s: the heuristic is off for this session now.
+    assert!(e.handle(Input::Tick, at(11)).is_empty());
+    assert_eq!(status_of(&e, "a"), Status::Working);
+}
+
+/// R25 (3): a session started after install counts as hooked.
+#[test]
+fn hooks_active_for_session_started_after_install() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    let mut e = engine(home, &probe, false);
+    e.load(at(1));
+    e.set_hooks_installed(true, at(2));
+    write_session_at(home, 100, "a", CWD, "busy", at(5).timestamp_millis());
+    probe.set_running(100, true);
+    let t = transcript(home, "a");
+    write_lines(
+        &t,
+        &[
+            user_prompt("hello", &ts(5)),
+            assistant_tool_use("m1", "tu1", "Bash", &ts(6)),
+        ],
+    );
+    e.handle(Input::Registry, at(6));
+    assert_eq!(status_of(&e, "a"), Status::Working);
+    assert!(e.handle(Input::Tick, at(13)).is_empty());
+    assert_eq!(status_of(&e, "a"), Status::Working);
+}
+
+/// Hooks already installed at load: the install time is the settings file's
+/// mtime; sessions started before it keep the heuristic, later ones don't.
+#[test]
+fn hooks_since_at_load_is_settings_mtime() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    fs::write(home.join("settings.json"), "{}").unwrap();
+    let now = Utc::now();
+    let old = (now - Duration::hours(1)).timestamp_millis();
+    let new = (now + Duration::hours(1)).timestamp_millis();
+    for (pid, sid, started) in [(100, "old", old), (200, "new", new)] {
+        write_session_at(home, pid, sid, CWD, "busy", started);
+        probe.set_running(pid, true);
+        let ts0 = (now - Duration::seconds(30)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let ts1 = (now - Duration::seconds(20)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        write_lines(
+            &transcript(home, sid),
+            &[
+                user_prompt("hi", &ts0),
+                assistant_tool_use("m1", "tu1", "Bash", &ts1),
+            ],
+        );
+    }
+    let mut e = engine(home, &probe, true);
+    e.load(now);
+    assert_eq!(status_of(&e, "old"), Status::MaybeWaiting);
+    assert_eq!(status_of(&e, "new"), Status::Working);
+}
+
+/// Uninstall then reinstall: the install time moves to the reinstall.
+#[test]
+fn reinstall_restamps_hooks_since() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    let mut e = engine(home, &probe, false);
+    e.load(at(1));
+    e.set_hooks_installed(true, at(2));
+    e.set_hooks_installed(false, at(3));
+    write_session_at(home, 100, "a", CWD, "busy", at(4).timestamp_millis());
+    probe.set_running(100, true);
+    write_lines(
+        &transcript(home, "a"),
+        &[
+            user_prompt("hello", &ts(4)),
+            assistant_tool_use("m1", "tu1", "Bash", &ts(5)),
+        ],
+    );
+    e.handle(Input::Registry, at(5));
+    e.set_hooks_installed(true, at(6));
+    // Started while hooks were off, so it never loaded them.
+    e.handle(Input::Tick, at(12));
+    assert_eq!(status_of(&e, "a"), Status::MaybeWaiting);
 }
 
 #[test]

@@ -62,6 +62,9 @@ struct Session {
     stopped_at: Option<DateTime<Utc>>,
     /// Newest applied hook event; anything not newer is a replay and ignored.
     last_event_at: Option<DateTime<Utc>>,
+    /// This session has delivered at least one accepted hook event, so its
+    /// Claude Code process runs our hooks (R25).
+    hook_seen: bool,
     status_since: DateTime<Utc>,
     exited_at: Option<DateTime<Utc>>,
     last: Option<Agent>,
@@ -71,6 +74,10 @@ pub struct Engine {
     claude_dir: PathBuf,
     probe: Box<dyn ProcessProbe + Send>,
     hooks_installed: bool,
+    /// When hooks were detected installed: sessions started after this run
+    /// our hooks (Claude Code snapshots hooks at session start). `None`
+    /// while hooks are not installed (R25).
+    hooks_since: Option<DateTime<Utc>>,
     sessions: HashMap<String, Session>,
     /// Sessions removed (or skipped) as long-exited, with the registry entry
     /// they had, so a lingering registry file does not bring them back.
@@ -214,10 +221,18 @@ impl Engine {
         hooks_installed: bool,
     ) -> Self {
         let events = EventsTail::new(events_path(&claude_dir));
+        // Installed before we started: the best install time we have is the
+        // settings file's mtime (any later edit only makes this conservative).
+        let hooks_since = hooks_installed
+            .then(|| std::fs::metadata(claude_dir.join("settings.json")).ok())
+            .flatten()
+            .and_then(|m| m.modified().ok())
+            .map(DateTime::<Utc>::from);
         Self {
             claude_dir,
             probe,
             hooks_installed,
+            hooks_since,
             sessions: HashMap::new(),
             tombstones: HashMap::new(),
             events,
@@ -286,9 +301,23 @@ impl Engine {
         }
     }
 
+    /// Records whether hooks are installed. The first `true` after `false`
+    /// stamps `now` as the install time; only sessions started after it (or
+    /// that have delivered a hook event) count as hooked (R25).
     pub fn set_hooks_installed(&mut self, on: bool, now: DateTime<Utc>) -> Vec<Change> {
+        if !on {
+            self.hooks_since = None;
+        } else if !self.hooks_installed || self.hooks_since.is_none() {
+            self.hooks_since = Some(now);
+        }
         self.hooks_installed = on;
         self.rebuild_all(now)
+    }
+
+    /// Overrides the detected install time (tests; callers that know better
+    /// than the settings file's mtime).
+    pub fn set_hooks_since(&mut self, since: Option<DateTime<Utc>>) {
+        self.hooks_since = since;
     }
 
     /// The last emitted agents, sorted by id.
@@ -348,6 +377,7 @@ impl Engine {
             hook: None,
             stopped_at: None,
             last_event_at: None,
+            hook_seen: false,
             status_since: exited_at.unwrap_or(now),
             exited_at,
             last: None,
@@ -492,6 +522,7 @@ impl Engine {
                 continue;
             }
             s.last_event_at = Some(ev.received_at);
+            s.hook_seen = true;
             match ev.kind {
                 HookKind::Notification(signal) => {
                     s.hook = Some(ActiveHook {
@@ -547,8 +578,13 @@ impl Engine {
     }
 
     fn rebuild_one(&mut self, id: &str, now: DateTime<Utc>) -> Option<Change> {
-        let hooks_installed = self.hooks_installed;
+        let hooks_on = self.hooks_installed;
+        let hooks_since = self.hooks_since;
         let s = self.sessions.get_mut(id)?;
+        // Hooks only count for a session that runs them (R25): it delivered
+        // an event, or it started after hooks were installed.
+        let hooks_installed = hooks_on
+            && (s.hook_seen || hooks_since.is_some_and(|t| ms_to_utc(s.entry.started_at_ms) > t));
         let summary = s.tail.summary();
         let newer = |t: DateTime<Utc>| summary.last_activity.is_some_and(|la| la > t);
 
