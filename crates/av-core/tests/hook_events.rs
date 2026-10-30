@@ -25,6 +25,19 @@ fn classify_by_type() {
         Some(HookSignal::WaitingInput)
     );
     assert_eq!(
+        classify_notification(
+            Some("permission_prompt"),
+            "Claude needs your permission to use Bash"
+        ),
+        Some(HookSignal::Permission {
+            tool: Some("Bash".into())
+        })
+    );
+    assert_eq!(
+        classify_notification(Some("permission_prompt"), "Permission needed"),
+        Some(HookSignal::Permission { tool: None })
+    );
+    assert_eq!(
         classify_notification(Some("auth_success"), "needs your permission"),
         None
     );
