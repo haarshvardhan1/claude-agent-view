@@ -2,7 +2,7 @@
 
 use av_core::model::{Agent, Context, Status, Tokens};
 use chrono::{DateTime, Duration, Utc};
-use desktop_lib::tray::{TrayItem, tray_model};
+use desktop_lib::tray::{TrayItem, TrayModel, TrayState, tray_model};
 
 fn t0() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-10-30T12:00:00Z")
@@ -102,4 +102,21 @@ fn tray_model_cuts_titles_and_skips_maybe_waiting_count() {
     assert_eq!(busy[0].label, format!("● {} — proj", "é".repeat(40)));
     // No activity sorts last.
     assert_eq!(busy[1].id, "b");
+}
+
+#[test]
+fn tray_state_claims_changed_models_and_releases_the_lock() {
+    let st = TrayState::default();
+    let a: TrayModel = (Some("1".into()), vec![], vec![]);
+    let b: TrayModel = (None, vec![], vec![]);
+    assert!(st.claim(&a));
+    // The lock is not held after claim: a second call doesn't deadlock.
+    assert!(!st.claim(&a));
+    assert!(st.claim(&b));
+    // A failed apply forgets the model so the next rebuild retries...
+    st.forget(&b);
+    assert!(st.claim(&b));
+    // ...but forgetting a model that is no longer current is a no-op.
+    st.forget(&a);
+    assert!(!st.claim(&b));
 }

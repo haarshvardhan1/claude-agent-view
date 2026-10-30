@@ -69,6 +69,9 @@ pub struct Runtime {
     settings_dir: PathBuf,
     /// Serialises install/uninstall (+ status sync); never held with `engine`.
     hooks_lock: Mutex<()>,
+    /// The loop thread's input channel, once started. Hook status changes go
+    /// through it so every change batch is published from one thread, in order.
+    loop_tx: Mutex<Option<Sender<Input>>>,
     engine: Mutex<Engine>,
     notifier: Mutex<Notifier>,
     settings: Mutex<AppSettings>,
@@ -91,6 +94,7 @@ impl Runtime {
         let hooks = hooks_status(&claude_dir.join("settings.json")) == HooksStatus::Installed;
         Self {
             hooks_lock: Mutex::new(()),
+            loop_tx: Mutex::new(None),
             engine: Mutex::new(Engine::new(claude_dir.clone(), probe, hooks)),
             claude_dir,
             av_path: default_av_path(),
@@ -120,8 +124,14 @@ impl Runtime {
         hooks_status(&self.settings_file())
     }
 
+    /// Routes hook status changes to the loop thread behind `tx` instead of
+    /// applying them on the caller's thread.
+    pub fn attach_loop(&self, tx: Sender<Input>) {
+        *lock(&self.loop_tx) = Some(tx);
+    }
+
     /// Installs (or repairs) the hooks. Refuses when `av` is missing or empty.
-    pub fn install_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+    pub fn install_hooks(&self, now: DateTime<Utc>) -> Result<HookReport, CmdError> {
         let _guard = lock(&self.hooks_lock);
         let ok = std::fs::metadata(&self.av_path).is_ok_and(|m| m.is_file() && m.len() > 0);
         if !ok {
@@ -131,27 +141,29 @@ impl Runtime {
             ));
         }
         let report = install(&self.settings_file(), &self.av_path, now).map_err(hook_err)?;
-        Ok((to_report(report), self.sync_hooks(now)))
+        self.sync_hooks(now);
+        Ok(to_report(report))
     }
 
-    pub fn uninstall_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+    pub fn uninstall_hooks(&self, now: DateTime<Utc>) -> Result<HookReport, CmdError> {
         let _guard = lock(&self.hooks_lock);
         let report = uninstall(&self.settings_file(), now).map_err(hook_err)?;
-        Ok((to_report(report), self.sync_hooks(now)))
+        self.sync_hooks(now);
+        Ok(to_report(report))
     }
 
-    /// Pushes the current hooks status into the engine and runs its changes
-    /// through the notifier.
-    fn sync_hooks(&self, now: DateTime<Utc>) -> Published {
-        let on = self.hooks_status() == HooksStatus::Installed;
-        let changes = lock(&self.engine).set_hooks_installed(on, now);
-        if changes.is_empty() {
-            return (changes, Vec::new());
+    /// Pushes the current hooks status into the engine: through the loop
+    /// thread when one is attached (it publishes the changes), otherwise
+    /// applied here (no loop, nothing to publish to; tests).
+    fn sync_hooks(&self, now: DateTime<Utc>) {
+        let input = Input::HooksInstalled(self.hooks_status() == HooksStatus::Installed);
+        let tx = lock(&self.loop_tx).clone();
+        match tx {
+            Some(tx) if tx.send(input.clone()).is_ok() => {}
+            _ => {
+                self.step(input, now);
+            }
         }
-        let notify = lock(&self.settings).notify.clone();
-        let focused = self.focused_agent();
-        let n = lock(&self.notifier).on_changes(&changes, &notify, focused.as_deref(), now);
-        (changes, n)
     }
 
     pub fn claude_dir(&self) -> &PathBuf {
@@ -297,6 +309,7 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
     app.manage(rt.clone());
 
     let (tx, rx) = mpsc::channel();
+    rt.attach_loop(tx.clone());
     // Watch before loading so nothing that changes during the load is missed.
     let watch = try_watch(&rt, &tx);
     rt.init(Utc::now());

@@ -31,6 +31,7 @@ struct Fx {
     _d: tempfile::TempDir,
     home: PathBuf,
     av: PathBuf,
+    probe: SharedProbe,
     rt: Runtime,
 }
 
@@ -71,6 +72,7 @@ fn fx(av_content: Option<&[u8]>) -> Fx {
         _d: d,
         home,
         av,
+        probe,
         rt,
     }
 }
@@ -88,7 +90,7 @@ fn install_writes_entries_and_backup() {
     f.rt.apply(desktop_lib_tick(), at(8));
     assert_eq!(status(&f.rt), Status::MaybeWaiting);
 
-    let (report, (changes, _)) = f.rt.install_hooks(at(9)).unwrap();
+    let report = f.rt.install_hooks(at(9)).unwrap();
     assert!(report.changed);
     let backup = PathBuf::from(report.backup.expect("backup"));
     assert!(backup.exists());
@@ -98,8 +100,81 @@ fn install_writes_entries_and_backup() {
     assert_eq!(f.rt.hooks_status(), HooksStatus::Installed);
     // R25: the session was already running, so it never loaded the hooks;
     // the heuristic stays on for it.
-    assert!(changes.is_empty());
     assert_eq!(status(&f.rt), Status::MaybeWaiting);
+}
+
+/// Without a loop attached, install still updates the engine's hooks state:
+/// a session started after the install counts as hooked.
+#[test]
+fn install_updates_engine_hooks_state() {
+    let f = fx(Some(b"bin"));
+    f.rt.init(at(2));
+    f.rt.install_hooks(at(3)).unwrap();
+    new_session(&f, 200, "b", at(5));
+    f.rt.apply(av_core::engine::Input::Registry, at(6));
+    f.rt.apply(desktop_lib_tick(), at(14));
+    let b =
+        f.rt.list_agents()
+            .into_iter()
+            .find(|a| a.id == "b")
+            .unwrap();
+    assert_eq!(b.status, Status::Working);
+}
+
+/// With the loop attached, install/uninstall don't touch the engine on the
+/// calling thread: they send the new status to the loop, in order.
+#[test]
+fn install_routes_through_loop_channel() {
+    let f = fx(Some(b"bin"));
+    let settings = f.home.join("settings.json");
+    fs::write(&settings, r#"{"theme":"dark"}"#).unwrap();
+    f.rt.init(at(2));
+    let (tx, rx) = std::sync::mpsc::channel();
+    f.rt.attach_loop(tx);
+    f.rt.install_hooks(at(3)).unwrap();
+    f.rt.uninstall_hooks(at(4)).unwrap();
+    f.rt.install_hooks(at(5)).unwrap();
+    let got: Vec<_> = rx.try_iter().collect();
+    use av_core::engine::Input::HooksInstalled;
+    assert_eq!(
+        got,
+        vec![
+            HooksInstalled(true),
+            HooksInstalled(false),
+            HooksInstalled(true)
+        ]
+    );
+    // The loop applies it: a session started after the install is hooked.
+    f.rt.apply(got[2].clone(), at(5));
+    new_session(&f, 200, "b", at(6));
+    f.rt.apply(av_core::engine::Input::Registry, at(7));
+    f.rt.apply(desktop_lib_tick(), at(15));
+    let b =
+        f.rt.list_agents()
+            .into_iter()
+            .find(|a| a.id == "b")
+            .unwrap();
+    assert_eq!(b.status, Status::Working);
+}
+
+/// A busy session `sid` started at `started` with a Bash tool open.
+fn new_session(f: &Fx, pid: u32, sid: &str, started: DateTime<Utc>) {
+    let home = &f.home;
+    f.probe.set_running(pid, true);
+    write_session_at(home, pid, sid, CWD, "busy", started.timestamp_millis());
+    let t = home
+        .join("projects")
+        .join(encode_project_dir(CWD))
+        .join(format!("{sid}.jsonl"));
+    fs::write(
+        &t,
+        format!(
+            "{}\n{}\n",
+            user_prompt("hi", &ts(5)),
+            assistant_tool_use("m1", "tu1", "Bash", &ts(6))
+        ),
+    )
+    .unwrap();
 }
 
 fn desktop_lib_tick() -> av_core::engine::Input {
@@ -115,7 +190,7 @@ fn uninstall_removes_entries() {
     f.rt.install_hooks(at(3)).unwrap();
     assert_eq!(status(&f.rt), Status::Working);
 
-    let (report, _) = f.rt.uninstall_hooks(at(10)).unwrap();
+    let report = f.rt.uninstall_hooks(at(10)).unwrap();
     assert!(report.changed);
     assert!(
         !fs::read_to_string(&settings)

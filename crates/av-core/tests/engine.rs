@@ -651,3 +651,29 @@ fn failed_batch_probe_keeps_every_session_alive() {
         assert_eq!(status_of(&e, sid), Status::Exited);
     }
 }
+
+/// `Input::HooksInstalled` is the same as `set_hooks_installed`.
+#[test]
+fn hooks_installed_input_matches_setter() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    let mut e = engine(home, &probe, false);
+    e.load(at(1));
+    e.handle(Input::HooksInstalled(true), at(2));
+    write_session_at(home, 100, "a", CWD, "busy", at(3).timestamp_millis());
+    probe.set_running(100, true);
+    write_lines(
+        &transcript(home, "a"),
+        &[
+            user_prompt("hello", &ts(3)),
+            assistant_tool_use("m1", "tu1", "Bash", &ts(4)),
+        ],
+    );
+    e.handle(Input::Registry, at(4));
+    e.handle(Input::Tick, at(11));
+    assert_eq!(status_of(&e, "a"), Status::Working);
+    // Removing hooks turns the heuristic back on.
+    let a = one_update(e.handle(Input::HooksInstalled(false), at(12)));
+    assert_eq!(a.status, Status::MaybeWaiting);
+}

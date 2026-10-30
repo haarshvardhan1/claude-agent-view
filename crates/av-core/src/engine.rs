@@ -38,6 +38,10 @@ pub enum Input {
     Tick,
     /// Full re-read: registry, every transcript, events.
     Rescan,
+    /// Hooks were installed (`true`) or removed (`false`); same as
+    /// [`Engine::set_hooks_installed`]. Lets a caller route install/uninstall
+    /// through the thread that drives the engine, in order with other inputs.
+    HooksInstalled(bool),
 }
 
 struct SubTail {
@@ -267,6 +271,7 @@ impl Engine {
                 changes.extend(self.rebuild_all(now));
                 changes
             }
+            Input::HooksInstalled(on) => self.set_hooks_installed(on, now),
             Input::Rescan => {
                 self.sync_registry(now);
                 for s in self.sessions.values_mut() {

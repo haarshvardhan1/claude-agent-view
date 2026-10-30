@@ -1,7 +1,7 @@
 //! Tauri commands: thin wrappers over [`Runtime`] methods so the logic is
 //! testable without a window.
 
-use crate::runtime::{HookReport, Runtime, publish};
+use crate::runtime::{HookReport, Runtime};
 use crate::settings::AppSettings;
 use av_core::hooks::install::HooksStatus;
 use av_core::model::{Agent, TranscriptPage};
@@ -55,12 +55,15 @@ impl From<PageReq> for PageRequest {
 
 type Rt<'a> = State<'a, Arc<Runtime>>;
 
-#[tauri::command]
+// Commands that take the engine lock or touch files are `async` so they run
+// off the main thread: the tray rebuild marshals onto the main thread, and
+// file reads must not stall the UI.
+#[tauri::command(async)]
 pub fn list_agents(rt: Rt<'_>) -> Result<Vec<Agent>, CmdError> {
     Ok(rt.list_agents())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_transcript(
     rt: Rt<'_>,
     agent_id: String,
@@ -123,22 +126,19 @@ pub fn watcher_mode(rt: Rt<'_>) -> Result<String, CmdError> {
     Ok(rt.watcher_mode().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hooks_status(rt: Rt<'_>) -> Result<HooksStatus, CmdError> {
     Ok(rt.hooks_status())
 }
 
-/// Also serves as Repair.
-#[tauri::command]
-pub fn install_hooks(app: AppHandle, rt: Rt<'_>) -> Result<HookReport, CmdError> {
-    let (report, published) = rt.install_hooks(chrono::Utc::now())?;
-    publish(&app, &rt, published);
-    Ok(report)
+/// Also serves as Repair. The engine update is sent to the runtime loop,
+/// which publishes it.
+#[tauri::command(async)]
+pub fn install_hooks(rt: Rt<'_>) -> Result<HookReport, CmdError> {
+    rt.install_hooks(chrono::Utc::now())
 }
 
-#[tauri::command]
-pub fn uninstall_hooks(app: AppHandle, rt: Rt<'_>) -> Result<HookReport, CmdError> {
-    let (report, published) = rt.uninstall_hooks(chrono::Utc::now())?;
-    publish(&app, &rt, published);
-    Ok(report)
+#[tauri::command(async)]
+pub fn uninstall_hooks(rt: Rt<'_>) -> Result<HookReport, CmdError> {
+    rt.uninstall_hooks(chrono::Utc::now())
 }

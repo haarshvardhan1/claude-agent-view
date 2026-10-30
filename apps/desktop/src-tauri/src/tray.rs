@@ -65,6 +65,29 @@ pub struct TrayState {
     last: Mutex<Option<TrayModel>>,
 }
 
+impl TrayState {
+    /// Records `model` as applied and returns `true` if it differs from the
+    /// last one. The lock is released on return: the caller builds and sets
+    /// the menu (which marshals onto the main thread) without holding it.
+    pub fn claim(&self, model: &TrayModel) -> bool {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_ref() == Some(model) {
+            return false;
+        }
+        *last = Some(model.clone());
+        true
+    }
+
+    /// Forgets `model` if it is still the recorded one (its apply failed), so
+    /// the next rebuild retries.
+    pub fn forget(&self, model: &TrayModel) {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_ref() == Some(model) {
+            *last = None;
+        }
+    }
+}
+
 fn build_menu(app: &AppHandle, model: &TrayModel) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
     let groups = [("Needs you", &model.1), ("Working", &model.2)];
@@ -131,17 +154,20 @@ pub fn rebuild_tray(app: &AppHandle, agents: &[Agent]) {
         return;
     };
     let model = tray_model(agents);
-    let mut last = state.last.lock().unwrap_or_else(|e| e.into_inner());
-    if last.as_ref() == Some(&model) {
+    // Compare and record under the lock, then build/set without it: those
+    // calls block on the main thread, which may itself be waiting on us.
+    if !state.claim(&model) {
         return;
     }
     let _ = tray.set_title(model.0.as_deref());
     match build_menu(app, &model) {
         Ok(menu) => {
             let _ = tray.set_menu(Some(menu));
-            *last = Some(model);
         }
-        Err(e) => eprintln!("agent-viewer: tray menu rebuild failed: {e}"),
+        Err(e) => {
+            state.forget(&model);
+            eprintln!("agent-viewer: tray menu rebuild failed: {e}");
+        }
     }
 }
 
