@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
-use av_core::{scan, Agent, AgentStatus, ScanResult, SystemProbe};
 use av_core::subagents::SubagentStatus;
+use av_core::{scan, Agent, AgentStatus, ScanResult, SystemProbe};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -32,6 +32,35 @@ enum Cmd {
         #[arg(long)]
         claude_dir: Option<PathBuf>,
     },
+    /// Record a Claude Code hook event (stdin JSON); never prints, never fails
+    Hook {
+        /// Marker only; accepted and ignored
+        #[arg(long)]
+        agent_viewer: bool,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
+        /// Unknown extra arguments are ignored so future hook flags cannot break a session
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        _rest: Vec<String>,
+    },
+}
+
+/// Reads stdin and appends it to the events file. Every error and panic is swallowed.
+fn run_hook(claude_dir: Option<PathBuf>) {
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = std::panic::catch_unwind(|| {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut buf);
+        let input = String::from_utf8_lossy(&buf);
+        if let Ok(dir) = resolve_dir(claude_dir) {
+            let _ = av_core::hooks::events::write_event(
+                &av_core::hooks::events::events_path(&dir),
+                &input,
+                Utc::now(),
+            );
+        }
+    });
 }
 
 fn resolve_dir(arg: Option<PathBuf>) -> Result<PathBuf> {
@@ -71,7 +100,9 @@ fn fmt_age(started_ms: i64, now_ms: i64) -> String {
 /// Replace every control character (escape sequences, CR, tabs, newlines...)
 /// with a space so untrusted text cannot drive the terminal.
 fn sanitize(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -99,11 +130,19 @@ fn render(result: &ScanResult, all: bool, now_ms: i64) -> String {
         .iter()
         .filter(|a| all || a.status != AgentStatus::Exited)
         .collect();
-    let header = ["STATUS", "NAME", "TASK", "PROJECT", "BRANCH", "KIND", "AGE", "TOKENS"];
+    let header = [
+        "STATUS", "NAME", "TASK", "PROJECT", "BRANCH", "KIND", "AGE", "TOKENS",
+    ];
     let rows: Vec<[String; 8]> = agents
         .iter()
         .map(|a| {
-            let project = a.entry.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+            let project = a
+                .entry
+                .cwd
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
             [
                 a.status.label().to_string(),
                 sanitize(&a.entry.name),
@@ -156,7 +195,12 @@ fn print_warnings(r: &ScanResult) {
 
 fn main() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::List { json, all, claude_dir } => {
+        Cmd::Hook { claude_dir, .. } => run_hook(claude_dir),
+        Cmd::List {
+            json,
+            all,
+            claude_dir,
+        } => {
             let dir = resolve_dir(claude_dir)?;
             let mut result = do_scan(&dir);
             print_warnings(&result);

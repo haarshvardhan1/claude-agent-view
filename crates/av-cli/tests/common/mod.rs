@@ -20,7 +20,8 @@ pub fn fixture_home(home: &Path) {
     let proj = home.join("projects").join("-tmp-myproj");
     fs::create_dir_all(&proj).unwrap();
     let t = proj.join(format!("{SESSION}.jsonl"));
-    let title = serde_json::json!({"type": "ai-title", "aiTitle": "Fix the widget", "sessionId": SESSION});
+    let title =
+        serde_json::json!({"type": "ai-title", "aiTitle": "Fix the widget", "sessionId": SESSION});
     fs::write(&t, format!("{title}\n")).unwrap();
 
     let sub = proj.join(SESSION).join("subagents");
