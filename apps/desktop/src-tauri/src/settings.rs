@@ -42,3 +42,20 @@ pub fn resolve_claude_dir(s: &AppSettings, home: Option<PathBuf>) -> PathBuf {
         _ => home.unwrap_or_default().join(".claude"),
     }
 }
+
+/// Env var that overrides the claude folder for this run (perf fixtures,
+/// testing against a scratch folder). Checked before `settings.claudeDir`.
+pub const CLAUDE_DIR_ENV: &str = "AGENT_VIEWER_CLAUDE_DIR";
+
+/// `override_dir` (the [`CLAUDE_DIR_ENV`] value) when set and non-empty, else
+/// [`resolve_claude_dir`].
+pub fn resolve_claude_dir_with_override(
+    s: &AppSettings,
+    override_dir: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match override_dir {
+        Some(d) if !d.to_string_lossy().trim().is_empty() => PathBuf::from(d),
+        _ => resolve_claude_dir(s, home),
+    }
+}

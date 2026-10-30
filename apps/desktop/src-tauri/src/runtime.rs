@@ -283,8 +283,11 @@ impl Runtime {
 pub fn start(app: &AppHandle) -> tauri::Result<()> {
     let settings_dir = app.path().app_data_dir()?;
     let settings = settings::load(&settings_dir);
-    let claude_dir =
-        settings::resolve_claude_dir(&settings, std::env::var_os("HOME").map(PathBuf::from));
+    let claude_dir = settings::resolve_claude_dir_with_override(
+        &settings,
+        std::env::var_os(settings::CLAUDE_DIR_ENV),
+        std::env::var_os("HOME").map(PathBuf::from),
+    );
     let rt = Arc::new(Runtime::new(
         claude_dir,
         settings_dir,
@@ -337,6 +340,9 @@ pub fn publish(app: &AppHandle, rt: &Runtime, (changes, notifications): Publishe
     if changes.is_empty() {
         return;
     }
+    if log_changes() {
+        eprintln!("{}", change_log_line(Utc::now(), &changes));
+    }
     let _ = app.emit(CHANGED_EVENT, &changes);
     crate::tray::rebuild_tray(app, &rt.list_agents());
     for n in notifications {
@@ -351,6 +357,42 @@ pub fn publish(app: &AppHandle, rt: &Runtime, (changes, notifications): Publishe
             Err(e) => eprintln!("agent-viewer: notification failed: {e}"),
         }
     }
+}
+
+/// Env var that, when set to `1`, logs every emitted change batch to stderr
+/// with a millisecond timestamp (latency measurements). Off by default.
+pub const LOG_CHANGES_ENV: &str = "AGENT_VIEWER_LOG_CHANGES";
+
+fn log_changes() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os(LOG_CHANGES_ENV).is_some_and(|v| v == "1"))
+}
+
+/// `agent-viewer: changes t=<epoch ms> <kind>:<id>:<status> ...`.
+pub fn change_log_line(now: DateTime<Utc>, changes: &[Change]) -> String {
+    let parts: Vec<String> = changes
+        .iter()
+        .map(|c| match c {
+            Change::AgentAdded { agent } | Change::AgentUpdated { agent } => {
+                let kind = if matches!(c, Change::AgentAdded { .. }) {
+                    "added"
+                } else {
+                    "updated"
+                };
+                let status = serde_json::to_value(&agent.status)
+                    .ok()
+                    .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+                    .unwrap_or_default();
+                format!("{kind}:{}:{status}", agent.id)
+            }
+            Change::AgentRemoved { id } => format!("removed:{id}"),
+        })
+        .collect();
+    format!(
+        "agent-viewer: changes t={} {}",
+        now.timestamp_millis(),
+        parts.join(" ")
+    )
 }
 
 fn run_loop(

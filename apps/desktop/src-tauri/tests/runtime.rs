@@ -247,3 +247,37 @@ fn step_notifies_unless_focused_on_agent() {
     assert_eq!(error_notifications(true, false), 1);
     assert_eq!(error_notifications(true, true), 0);
 }
+
+#[test]
+fn env_override_wins_over_settings_and_home() {
+    let mut s = AppSettings {
+        claude_dir: Some("/data/claude".into()),
+        ..AppSettings::default()
+    };
+    let home = Some(PathBuf::from("/Users/x"));
+    assert_eq!(
+        settings::resolve_claude_dir_with_override(&s, Some("/tmp/fixture".into()), home.clone()),
+        PathBuf::from("/tmp/fixture")
+    );
+    // Unset or blank falls through to settings, then $HOME/.claude.
+    assert_eq!(
+        settings::resolve_claude_dir_with_override(&s, Some("  ".into()), home.clone()),
+        PathBuf::from("/data/claude")
+    );
+    s.claude_dir = None;
+    assert_eq!(
+        settings::resolve_claude_dir_with_override(&s, None, home),
+        PathBuf::from("/Users/x/.claude")
+    );
+}
+
+#[test]
+fn change_log_line_has_epoch_ms_and_change_kinds() {
+    use chrono::TimeZone;
+    let now = chrono::Utc.timestamp_millis_opt(1_793_281_174_333).unwrap();
+    let changes = vec![av_core::model::Change::AgentRemoved { id: "s1".into() }];
+    assert_eq!(
+        desktop_lib::runtime::change_log_line(now, &changes),
+        "agent-viewer: changes t=1793281174333 removed:s1"
+    );
+}

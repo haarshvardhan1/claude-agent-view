@@ -1,7 +1,3 @@
-# Tauri + React + Typescript
+# Agent Viewer desktop app
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
-
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+The Tauri 2 app (Rust shell in `src-tauri`, React UI in `src`). See the [repo README](../../README.md) for how to run, build, sign and test it.
