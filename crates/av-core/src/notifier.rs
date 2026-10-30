@@ -200,13 +200,17 @@ impl Notifier {
                     .then(|| busy_since.map(|b| now - b))
                     .flatten()
                     .filter(|d| *d >= Duration::seconds(settings.finished_after_secs as i64));
+                // Both candidates, Finished first: `admit` drops WaitingInput
+                // only if Finished actually fired (spec §6), so a disabled
+                // Finished never silences WaitingInput.
                 if let Some(d) = busy_for {
                     let secs = d.num_seconds();
                     c.push((
                         NotifyKind::Finished,
                         format!("Finished after {}m {}s", secs / 60, secs % 60),
                     ));
-                } else if matches!(new, Status::WaitingInput) {
+                }
+                if matches!(new, Status::WaitingInput) {
                     c.push((NotifyKind::WaitingInput, "Waiting for your input".into()));
                 }
             }

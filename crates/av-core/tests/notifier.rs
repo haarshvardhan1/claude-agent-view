@@ -242,6 +242,32 @@ fn finished_suppresses_waiting_input() {
 }
 
 #[test]
+fn finished_off_still_sends_waiting_input_after_long_busy() {
+    let mut h = H::new();
+    h.s.finished = false;
+    h.go(added("a", Status::Idle), 0);
+    h.go(upd("a", Status::Working), 0);
+    let n = h.go(upd("a", Status::WaitingInput), 60);
+    assert_eq!(
+        n.iter().map(|x| x.kind).collect::<Vec<_>>(),
+        vec![NotifyKind::WaitingInput]
+    );
+    assert_eq!(n[0].body, "Waiting for your input");
+}
+
+#[test]
+fn long_busy_to_waiting_input_fires_finished_only() {
+    let mut h = H::new();
+    h.go(added("a", Status::Idle), 0);
+    h.go(upd("a", Status::Working), 0);
+    let n = h.go(upd("a", Status::WaitingInput), 60);
+    assert_eq!(
+        n.iter().map(|x| x.kind).collect::<Vec<_>>(),
+        vec![NotifyKind::Finished]
+    );
+}
+
+#[test]
 fn rate_limit_10s() {
     let mut h = H::new();
     h.go(added("a", Status::Working), 0);
