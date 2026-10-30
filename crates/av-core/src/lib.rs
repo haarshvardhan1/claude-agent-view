@@ -15,3 +15,4 @@ pub use scan::{scan, Agent, ScanResult};
 pub use status::AgentStatus;
 pub mod view;
 pub mod engine;
+pub mod watch;
