@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toastError } from "../lib/errors";
 import { call, openExternal } from "../lib/ipc";
 import type { AppSettings, HookReport, HooksStatus, NotifySettings } from "../types";
@@ -45,13 +45,27 @@ export function SettingsView() {
     call("set_settings", { settings: next }).catch(toastError);
   }, []);
 
-  const hookAction = (cmd: "install_hooks" | "uninstall_hooks") =>
-    call<HookReport>(cmd)
-      .then((r) => setBackup(r.backup))
-      .catch(toastError)
-      .finally(() => {
-        call<HooksStatus>("hooks_status").then(setHooks).catch(toastError);
-      });
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const hookAction = async (cmd: "install_hooks" | "uninstall_hooks") => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const r = await call<HookReport>(cmd);
+      setBackup(r.backup);
+    } catch (e) {
+      toastError(e);
+    }
+    try {
+      setHooks(await call<HooksStatus>("hooks_status"));
+    } catch (e) {
+      toastError(e);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
 
   const btn = "rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-700";
 
@@ -65,17 +79,17 @@ export function SettingsView() {
             <p className="mb-2">{hooks ? STATUS_TEXT[hooks] : "Checking…"}</p>
             <div className="flex gap-2">
               {hooks === "notInstalled" && (
-                <button type="button" className={btn} onClick={() => hookAction("install_hooks")}>
+                <button type="button" disabled={busy} className={btn} onClick={() => hookAction("install_hooks")}>
                   Install
                 </button>
               )}
               {hooks === "broken" && (
-                <button type="button" className={btn} onClick={() => hookAction("install_hooks")}>
+                <button type="button" disabled={busy} className={btn} onClick={() => hookAction("install_hooks")}>
                   Repair
                 </button>
               )}
               {(hooks === "installed" || hooks === "broken") && (
-                <button type="button" className={btn} onClick={() => hookAction("uninstall_hooks")}>
+                <button type="button" disabled={busy} className={btn} onClick={() => hookAction("uninstall_hooks")}>
                   Uninstall
                 </button>
               )}

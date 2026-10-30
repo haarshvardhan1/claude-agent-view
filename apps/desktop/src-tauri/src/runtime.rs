@@ -67,6 +67,8 @@ pub struct Runtime {
     claude_dir: PathBuf,
     av_path: PathBuf,
     settings_dir: PathBuf,
+    /// Serialises install/uninstall (+ status sync); never held with `engine`.
+    hooks_lock: Mutex<()>,
     engine: Mutex<Engine>,
     notifier: Mutex<Notifier>,
     settings: Mutex<AppSettings>,
@@ -88,6 +90,7 @@ impl Runtime {
     ) -> Self {
         let hooks = hooks_status(&claude_dir.join("settings.json")) == HooksStatus::Installed;
         Self {
+            hooks_lock: Mutex::new(()),
             engine: Mutex::new(Engine::new(claude_dir.clone(), probe, hooks)),
             claude_dir,
             av_path: default_av_path(),
@@ -119,6 +122,7 @@ impl Runtime {
 
     /// Installs (or repairs) the hooks. Refuses when `av` is missing or empty.
     pub fn install_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+        let _guard = lock(&self.hooks_lock);
         let ok = std::fs::metadata(&self.av_path).is_ok_and(|m| m.is_file() && m.len() > 0);
         if !ok {
             return Err(CmdError::new(
@@ -131,6 +135,7 @@ impl Runtime {
     }
 
     pub fn uninstall_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+        let _guard = lock(&self.hooks_lock);
         let report = uninstall(&self.settings_file(), now).map_err(hook_err)?;
         Ok((to_report(report), self.sync_hooks(now)))
     }

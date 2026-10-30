@@ -21,3 +21,9 @@ export function revealInFinder(path: string): Promise<void> {
 export function openExternal(url: string): Promise<void> {
   return openUrl(url);
 }
+
+/** Run `handler` when the window regains focus; returns an unsubscribe. */
+export function onWindowFocus(handler: () => void): () => void {
+  window.addEventListener("focus", handler);
+  return () => window.removeEventListener("focus", handler);
+}

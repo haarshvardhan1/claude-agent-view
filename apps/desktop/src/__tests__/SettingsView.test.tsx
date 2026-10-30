@@ -97,4 +97,20 @@ describe("SettingsView", () => {
       settings: { ...settings, notify: { ...settings.notify, finishedAfterSecs: 12 } },
     });
   });
+
+  it("double click on Install calls install_hooks once", async () => {
+    setup("notInstalled");
+    const inner = vi.mocked(call).getMockImplementation()!;
+    let release: (v: unknown) => void = () => {};
+    vi.mocked(call).mockImplementation((cmd: string, a?: Record<string, unknown>) =>
+      cmd === "install_hooks" ? (new Promise((r) => (release = r)) as never) : inner(cmd, a),
+    );
+    render(<SettingsView />);
+    const b = await screen.findByText("Install");
+    fireEvent.click(b);
+    fireEvent.click(b);
+    expect(b).toBeDisabled();
+    await act(async () => release({ backup: null, changed: true }));
+    expect(vi.mocked(call).mock.calls.filter((c) => c[0] === "install_hooks")).toHaveLength(1);
+  });
 });

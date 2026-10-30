@@ -154,3 +154,24 @@ fn sidecar_missing_refused() {
     assert_eq!(fs::read(&settings).unwrap(), br#"{"a":1}"#);
     assert!(f.av.exists());
 }
+
+#[test]
+fn concurrent_installs_yield_one_marker_per_event() {
+    let f = fx(Some(b"bin"));
+    let settings = f.home.join("settings.json");
+    fs::write(&settings, r#"{"theme":"dark"}"#).unwrap();
+    f.rt.init(at(2));
+    std::thread::scope(|s| {
+        for _ in 0..2 {
+            s.spawn(|| {
+                f.rt.install_hooks(at(9)).unwrap();
+            });
+        }
+    });
+    let text = fs::read_to_string(&settings).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(text.matches("--agent-viewer").count(), 2);
+    for (_, arr) in v["hooks"].as_object().unwrap() {
+        assert_eq!(arr.as_array().unwrap().len(), 1);
+    }
+}
