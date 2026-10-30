@@ -29,9 +29,9 @@ Idle CPU detail (mean % of one core over 60 s):
 | Run | App process | WebKit helpers | App + helpers | Notes |
 |---|---|---|---|---|
 | Before engine change, sampled 20–80 s after launch | 1.56 (max 8.6) | 1.34 | 2.90 (max 13.9) | All 20 cards' "since" labels tick every second for the first minute |
-| After, sampled 20–80 s after launch | 3.54 (max 9.7) | 4.23 | 7.77 (max 26.3) | Same first-minute effect; the window was probably visible this time |
+| After, sampled 20–80 s after launch | 3.54 (max 9.7) | 4.23 | 7.77 (max 26.3) | Same first-minute effect; someone clicked the hooks banner's Install 9 s before sampling began (see below) |
 | After, steady state (sampled 90–150 s after launch) | 0.02 (max 0.3) | 0.27 | 0.29 (max 2.6) | |
-| After, steady state, final build | 1.33 (max 8.8) | 1.20 | 2.52 (max 14.1) | ~0% for the first 40 s, then irregular activity in the app and WebContent together (probably someone using the screen; the run was unattended) |
+| After, steady state, final build | 1.33 (max 8.8) | 1.20 | 2.52 (max 14.1) | ~0% for the first 40 s, then activity in the app and WebContent together, starting when someone used the window (hooks were installed from the banner at 15:48:28) |
 
 `ps` children: the liveness probe's `ps` runs are separate short processes, so they are not in the app's row in Activity Monitor. Measured with `/usr/bin/time -l` (children's CPU = total − the app's own): about 1.1–1.3% of a core with 20 sessions. On this machine one `ps -p <20 pids>` costs about 45–60 ms of CPU, about the same as 20 single-pid runs.
 
@@ -47,6 +47,7 @@ Memory: peak RSS of the app process (`/usr/bin/time -l`) is 72 MB, with a peak m
 
 Caveats:
 - "Idle CPU < 2%" holds for the app process, which is what Activity Monitor shows as the app. Counting the WebKit helpers and the `ps` children too, the quiet steady state is about 1.4%. It goes over 2% in the first minute after many statuses change (the cards' second counters re-render every second) and while the window is being used.
+- Someone used the app window during three of the four app runs: the hooks banner's Install was clicked (each run's `settings.json` with the hook entries appeared inside the fixture folder, not in `~/.claude`). The only run with no interaction is the 0.02% steady-state run.
 - The fixture is synthetic. Real transcripts, subagents and hook events can cost more.
 
 ## Needs a human
