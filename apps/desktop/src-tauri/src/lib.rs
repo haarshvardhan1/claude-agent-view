@@ -66,6 +66,9 @@ pub fn run() {
             commands::set_selected_agent,
             commands::watcher_mode,
             commands::notification_permission,
+            commands::hooks_status,
+            commands::install_hooks,
+            commands::uninstall_hooks,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

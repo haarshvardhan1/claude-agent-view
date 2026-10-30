@@ -11,13 +11,14 @@ use crate::settings::{self, AppSettings};
 use av_core::SystemProbe;
 use av_core::engine::{Engine, Input};
 use av_core::hooks::events::{events_path, trim_events_file};
-use av_core::hooks::install::{HooksStatus, hooks_status};
+use av_core::hooks::install::{HookError, HooksStatus, hooks_status, install, uninstall};
 use av_core::liveness::ProcessProbe;
 use av_core::model::{Agent, Change, TranscriptPage};
 use av_core::notifier::{Notification, Notifier};
 use av_core::transcript_view::read_page;
 use av_core::watch::{WatchHandle, spawn_watcher};
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -36,8 +37,35 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// What the UI gets back from install / uninstall.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HookReport {
+    pub backup: Option<String>,
+    pub changed: bool,
+}
+
+/// A result plus the change batch and notifications still to be published.
+pub type Published = (Vec<Change>, Vec<Notification>);
+
+fn hook_err(e: HookError) -> CmdError {
+    match e {
+        HookError::InvalidJson(m) => CmdError::new("invalidSettings", m),
+        HookError::Io(e) => CmdError::io(e),
+    }
+}
+
+/// `<running exe dir>/av`.
+fn default_av_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.join("av")))
+        .unwrap_or_else(|| PathBuf::from("av"))
+}
+
 pub struct Runtime {
     claude_dir: PathBuf,
+    av_path: PathBuf,
     settings_dir: PathBuf,
     engine: Mutex<Engine>,
     notifier: Mutex<Notifier>,
@@ -62,6 +90,7 @@ impl Runtime {
         Self {
             engine: Mutex::new(Engine::new(claude_dir.clone(), probe, hooks)),
             claude_dir,
+            av_path: default_av_path(),
             settings_dir,
             notifier: Mutex::new(Notifier::new()),
             settings: Mutex::new(settings),
@@ -72,6 +101,52 @@ impl Runtime {
             main_visible: AtomicBool::new(true),
             last_notified: Mutex::new(None),
         }
+    }
+
+    /// Points hook installs at a different `av` binary (tests).
+    pub fn with_av_path(mut self, av_path: PathBuf) -> Self {
+        self.av_path = av_path;
+        self
+    }
+
+    fn settings_file(&self) -> PathBuf {
+        self.claude_dir.join("settings.json")
+    }
+
+    pub fn hooks_status(&self) -> HooksStatus {
+        hooks_status(&self.settings_file())
+    }
+
+    /// Installs (or repairs) the hooks. Refuses when `av` is missing or empty.
+    pub fn install_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+        let ok = std::fs::metadata(&self.av_path).is_ok_and(|m| m.is_file() && m.len() > 0);
+        if !ok {
+            return Err(CmdError::new(
+                "sidecarMissing",
+                format!("hook helper not found at {}", self.av_path.display()),
+            ));
+        }
+        let report = install(&self.settings_file(), &self.av_path, now).map_err(hook_err)?;
+        Ok((to_report(report), self.sync_hooks(now)))
+    }
+
+    pub fn uninstall_hooks(&self, now: DateTime<Utc>) -> Result<(HookReport, Published), CmdError> {
+        let report = uninstall(&self.settings_file(), now).map_err(hook_err)?;
+        Ok((to_report(report), self.sync_hooks(now)))
+    }
+
+    /// Pushes the current hooks status into the engine and runs its changes
+    /// through the notifier.
+    fn sync_hooks(&self, now: DateTime<Utc>) -> Published {
+        let on = self.hooks_status() == HooksStatus::Installed;
+        let changes = lock(&self.engine).set_hooks_installed(on, now);
+        if changes.is_empty() {
+            return (changes, Vec::new());
+        }
+        let notify = lock(&self.settings).notify.clone();
+        let focused = self.focused_agent();
+        let n = lock(&self.notifier).on_changes(&changes, &notify, focused.as_deref(), now);
+        (changes, n)
     }
 
     pub fn claude_dir(&self) -> &PathBuf {
@@ -232,6 +307,13 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn to_report(r: av_core::hooks::install::InstallReport) -> HookReport {
+    HookReport {
+        backup: r.backup.map(|b| b.display().to_string()),
+        changed: r.changed,
+    }
+}
+
 /// Spawns the watcher; on failure (or a missing claude dir, which is never
 /// created) switches to polling. Clears polling on success.
 pub fn try_watch(rt: &Runtime, tx: &Sender<Input>) -> Option<WatchHandle> {
@@ -246,11 +328,7 @@ pub fn try_watch(rt: &Runtime, tx: &Sender<Input>) -> Option<WatchHandle> {
 
 /// Emits a non-empty change batch, refreshes the tray and sends the
 /// notifications.
-fn publish(
-    app: &AppHandle,
-    rt: &Runtime,
-    (changes, notifications): (Vec<Change>, Vec<Notification>),
-) {
+pub fn publish(app: &AppHandle, rt: &Runtime, (changes, notifications): Published) {
     if changes.is_empty() {
         return;
     }

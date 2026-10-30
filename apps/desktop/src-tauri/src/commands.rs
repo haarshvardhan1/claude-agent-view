@@ -1,8 +1,9 @@
 //! Tauri commands: thin wrappers over [`Runtime`] methods so the logic is
 //! testable without a window.
 
-use crate::runtime::Runtime;
+use crate::runtime::{HookReport, Runtime, publish};
 use crate::settings::AppSettings;
+use av_core::hooks::install::HooksStatus;
 use av_core::model::{Agent, TranscriptPage};
 use av_core::transcript_view::PageRequest;
 use serde::{Deserialize, Serialize};
@@ -120,4 +121,24 @@ pub fn set_selected_agent(rt: Rt<'_>, id: Option<String>) -> Result<(), CmdError
 #[tauri::command]
 pub fn watcher_mode(rt: Rt<'_>) -> Result<String, CmdError> {
     Ok(rt.watcher_mode().to_string())
+}
+
+#[tauri::command]
+pub fn hooks_status(rt: Rt<'_>) -> Result<HooksStatus, CmdError> {
+    Ok(rt.hooks_status())
+}
+
+/// Also serves as Repair.
+#[tauri::command]
+pub fn install_hooks(app: AppHandle, rt: Rt<'_>) -> Result<HookReport, CmdError> {
+    let (report, published) = rt.install_hooks(chrono::Utc::now())?;
+    publish(&app, &rt, published);
+    Ok(report)
+}
+
+#[tauri::command]
+pub fn uninstall_hooks(app: AppHandle, rt: Rt<'_>) -> Result<HookReport, CmdError> {
+    let (report, published) = rt.uninstall_hooks(chrono::Utc::now())?;
+    publish(&app, &rt, published);
+    Ok(report)
 }
