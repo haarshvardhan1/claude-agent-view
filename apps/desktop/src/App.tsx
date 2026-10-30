@@ -45,7 +45,7 @@ function MainWindow() {
         <div className="w-[420px] shrink-0 border-r border-gray-200 dark:border-gray-800">
           <AgentList now={now} claudeDir={claudeDir} />
         </div>
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <DetailPanel />
         </div>
       </div>
