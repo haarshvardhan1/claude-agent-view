@@ -4,9 +4,16 @@ use crate::registry::SessionEntry;
 use std::collections::HashMap;
 use std::process::Command;
 
-/// The probe itself failed (e.g. `ps` could not be spawned); liveness is unknown.
+/// The probe itself failed (`ps` could not be spawned, or it exited non-zero
+/// with an error on stderr); liveness is unknown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeError(pub String);
+
+/// Why `run_ps` failed; only `Failed` is worth retrying per pid.
+enum PsError {
+    Spawn(ProbeError),
+    Failed(ProbeError),
+}
 
 pub trait ProcessProbe {
     /// Start time string of the process, or `None` when the pid is not running.
@@ -34,43 +41,58 @@ impl ProcessProbe for SystemProbe {
     }
 
     fn check(&self, pid: u32) -> Result<Option<String>, ProbeError> {
-        let out = Command::new("ps")
-            .args(["-o", "lstart=", "-p", &pid.to_string()])
-            .env("LC_ALL", "C")
-            .env("TZ", "UTC")
-            .output()
-            .map_err(|e| ProbeError(e.to_string()))?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let s = run_ps("lstart=", &pid.to_string()).map_err(|e| match e {
+            PsError::Spawn(e) | PsError::Failed(e) => e,
+        })?;
+        let s = s.trim().to_string();
         Ok((!s.is_empty()).then_some(s))
     }
 
     /// One `ps -o pid=,lstart= -p a,b,c` for all pids. A pid missing from the
-    /// output is not running. `ps` exits non-zero, silently, when none are.
+    /// output is not running.
     fn check_many(&self, pids: &[u32]) -> Vec<Result<Option<String>, ProbeError>> {
         if pids.is_empty() {
             return Vec::new();
         }
         let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-        let out = match Command::new("ps")
-            .args(["-o", "pid=,lstart=", "-p", &list])
-            .env("LC_ALL", "C")
-            .env("TZ", "UTC")
-            .output()
-        {
-            Ok(out) => out,
-            Err(e) => return pids.iter().map(|_| Err(ProbeError(e.to_string()))).collect(),
-        };
-        // `ps` rejects the whole list over one bad pid (e.g. "process id too
-        // large"); then fall back to one `ps` per pid.
-        if !out.status.success() && !out.stderr.is_empty() && pids.len() > 1 {
-            return pids.iter().map(|&pid| self.check(pid)).collect();
+        match run_ps("pid=,lstart=", &list) {
+            Ok(out) => {
+                let found = parse_pid_lstart(&out);
+                pids.iter().map(|pid| Ok(found.get(pid).cloned())).collect()
+            }
+            // `ps` rejects the whole list over one bad pid (e.g. "process id
+            // too large"); retry per pid so only that one reports an error.
+            Err(PsError::Failed(_)) if pids.len() > 1 => {
+                pids.iter().map(|&pid| self.check(pid)).collect()
+            }
+            Err(PsError::Spawn(e) | PsError::Failed(e)) => {
+                pids.iter().map(|_| Err(e.clone())).collect()
+            }
         }
-        let found = parse_pid_lstart(&String::from_utf8_lossy(&out.stdout));
-        pids.iter().map(|pid| Ok(found.get(pid).cloned())).collect()
     }
+}
+
+/// Runs `ps -o <fields> -p <list>` in UTC / C locale and classifies the result.
+fn run_ps(fields: &str, list: &str) -> Result<String, PsError> {
+    let out = Command::new("ps")
+        .args(["-o", fields, "-p", list])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .output()
+        .map_err(|e| PsError::Spawn(ProbeError(e.to_string())))?;
+    classify_ps(out.status.success(), &out.stdout, &out.stderr).map_err(PsError::Failed)
+}
+
+/// Success, or a silent non-zero exit (how `ps` reports "no such pid"), is
+/// `Ok(stdout)`. A non-zero exit with nothing on stdout and a message on
+/// stderr is a probe failure: liveness is unknown, not "dead".
+pub fn classify_ps(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String, ProbeError> {
+    let out = String::from_utf8_lossy(stdout).into_owned();
+    let err = String::from_utf8_lossy(stderr);
+    if !success && out.trim().is_empty() && !err.trim().is_empty() {
+        return Err(ProbeError(err.trim().to_string()));
+    }
+    Ok(out)
 }
 
 /// Parses `ps -o pid=,lstart=` output into pid -> start time.

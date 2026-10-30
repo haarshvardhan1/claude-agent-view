@@ -17,12 +17,14 @@
 #       (AGENT_VIEWER_LOG_CHANGES=1).
 #
 # Point the app at the fixture with AGENT_VIEWER_CLAUDE_DIR=<dir>.
-# Writes only inside <dir>; refuses ~/.claude. On exit it stops its `sleep`
-# processes and removes the sessions/ and projects/ folders it created.
+# Writes only inside <dir>; refuses ~/.claude (also via symlinks) and refuses
+# a <dir> that already has sessions/ or projects/. On exit it stops its
+# `sleep` processes and removes the sessions/ and projects/ folders it created
+# (marked by <dir>/.perf-fixture).
 set -euo pipefail
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -36,12 +38,37 @@ esac
 dir="$1"
 n="${2:-20}"
 
-mkdir -p "$dir"
-dir="$(cd "$dir" && pwd -P)"
-real_home_claude="$(cd "$HOME" && pwd -P)/.claude"
-case "$dir/" in
-  "$real_home_claude"/*) echo "refusing to write into $real_home_claude" >&2; exit 1 ;;
-esac
+# Resolve <dir> (symlinks included) before creating anything.
+if [ -d "$dir" ]; then
+  dir="$(cd "$dir" && pwd -P)"
+else
+  parent="$(dirname "$dir")"
+  [ -d "$parent" ] || { echo "parent folder $parent does not exist" >&2; exit 1; }
+  dir="$(cd "$parent" && pwd -P)/$(basename "$dir")"
+fi
+# Refuse ~/.claude, by its literal path and its resolved (symlink) target.
+claude_paths=("$HOME/.claude" "$(cd "$HOME" && pwd -P)/.claude")
+if [ -d "$HOME/.claude" ]; then claude_paths+=("$(cd "$HOME/.claude" && pwd -P)"); fi
+for c in "${claude_paths[@]}"; do
+  case "$dir/" in
+    "$c"/*) echo "refusing to write into $c" >&2; exit 1 ;;
+  esac
+done
+
+# Only folders this script created (marked) are ever removed.
+marker="$dir/.perf-fixture"
+if [ "$mode" = latency ]; then
+  [ -f "$marker" ] || { echo "no running fixture in $dir (no $marker)" >&2; exit 1; }
+else
+  for sub in sessions projects; do
+    if [ -e "$dir/$sub" ]; then
+      echo "refusing: $dir/$sub already exists (use an empty folder)" >&2
+      exit 1
+    fi
+  done
+  mkdir -p "$dir"
+  echo "created by scripts/perf-fixture.sh pid $$" > "$marker"
+fi
 
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time*1000'; }
 iso_now() { perl -MTime::HiRes=time -MPOSIX=strftime -e 'my $t=time; printf "%s.%03dZ\n", strftime("%Y-%m-%dT%H:%M:%S", gmtime($t)), ($t-int($t))*1000'; }
@@ -53,7 +80,10 @@ cleanup() {
   trap - INT TERM EXIT
   exec 2>/dev/null # silence bash's "Terminated" job notices
   if [ "${#pids[@]}" -gt 0 ]; then kill "${pids[@]}" || true; wait || true; fi
-  if [ "$mode" != latency ]; then rm -rf "$dir/sessions" "$dir/projects"; fi
+  if [ "$mode" != latency ] && [ -f "$marker" ]; then
+    rm -rf "$dir/sessions" "$dir/projects"
+    rm -f "$marker"
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -111,7 +141,6 @@ start_sleeper() {
 pid_of_session() { grep -l "\"sessionId\":\"$(sid_for "$1")\"" "$dir"/sessions/*.json | head -1 | xargs basename | sed 's/\.json$//'; }
 
 if [ "$mode" = latency ]; then
-  [ -d "$dir/sessions" ] || { echo "no fixture running in $dir" >&2; exit 1; }
   new=9999
   start_sleeper
   write_transcript "$new"

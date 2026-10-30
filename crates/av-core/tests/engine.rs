@@ -496,3 +496,36 @@ fn tick_probes_due_sessions_in_one_batch() {
     e.handle(Input::Tick, at(12));
     assert_eq!(probe.take_batches(), vec![vec![100, 300]]);
 }
+
+#[test]
+fn failed_batch_probe_keeps_every_session_alive() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path();
+    let probe = SharedProbe::default();
+    for (pid, sid) in [(100, "a"), (200, "b"), (300, "c")] {
+        live_session(home, &probe, pid, sid);
+    }
+    let mut e = engine(home, &probe, true);
+    e.load(at(1));
+    probe.take_batches();
+
+    // The batched probe fails for every pid: liveness is unknown, so nobody
+    // flips to exited (spec §7), even though the pids are gone meanwhile.
+    for pid in [100, 200, 300] {
+        probe.set_running(pid, false);
+    }
+    probe.set_fail(true);
+    assert!(e.handle(Input::Tick, at(10)).is_empty());
+    assert_eq!(probe.take_batches(), vec![vec![100, 200, 300]]);
+    for sid in ["a", "b", "c"] {
+        assert_eq!(status_of(&e, sid), Status::Working);
+    }
+
+    // Once the probe works again, the dead pids are seen as exited.
+    probe.set_fail(false);
+    let changes = e.handle(Input::Tick, at(16));
+    assert_eq!(changes.len(), 3);
+    for sid in ["a", "b", "c"] {
+        assert_eq!(status_of(&e, sid), Status::Exited);
+    }
+}

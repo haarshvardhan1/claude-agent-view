@@ -100,10 +100,14 @@ fn system_probe_check_many_matches_check() {
     assert_eq!(r[1], Ok(None));
     assert_eq!(SystemProbe.check_many(&[dead]), vec![Ok(None)]);
     assert!(SystemProbe.check_many(&[]).is_empty());
-    // A pid `ps` rejects outright (above pid_max) must not hide the others.
+    // A pid `ps` rejects outright (above pid_max) must not hide the others,
+    // and is a probe error (unknown), not "not running".
     let r = SystemProbe.check_many(&[own, 4_000_000]);
     assert_eq!(r[0], SystemProbe.check(own));
     assert!(r[0].as_ref().unwrap().is_some());
+    assert!(r[1].is_err(), "got {:?}", r[1]);
+    assert!(SystemProbe.check(4_000_000).is_err());
+    assert!(SystemProbe.check_many(&[4_000_000])[0].is_err());
 }
 
 #[test]
@@ -113,4 +117,15 @@ fn default_check_many_loops_over_check() {
         p.check_many(&[42, 7]),
         vec![Ok(Some("Thu Oct 29 12:36:53 2026".to_string())), Ok(None)]
     );
+}
+
+#[test]
+fn classify_ps_separates_no_such_pid_from_failure() {
+    use av_core::liveness::classify_ps;
+    // Success, and a silent non-zero exit ("no such pid"), are not errors.
+    assert_eq!(classify_ps(true, b"x\n", b""), Ok("x\n".to_string()));
+    assert_eq!(classify_ps(false, b"", b""), Ok(String::new()));
+    // Non-zero with a message on stderr and nothing on stdout is a failure.
+    assert!(classify_ps(false, b"", b"ps: process id too large: 4000000\n").is_err());
+    assert!(classify_ps(false, b"  \n", b"ps: boom").is_err());
 }

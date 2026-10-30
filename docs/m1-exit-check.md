@@ -9,7 +9,11 @@ Run with at least 5 real sessions. The set must include: one on a permission pro
 - [ ] The window and tray match every terminal. **Needs a human.**
 - [ ] Each notification kind fires once and is correct. **Needs a human.**
 - [ ] Hooks install, uninstall and repair cleanly; `settings.json` is the same as before after uninstall. **Needs a human** on the real `~/.claude/settings.json`. Automated coverage: install/uninstall/repair round-trips, backups, symlinked settings, paths with spaces (`crates/av-core/tests/hook_install.rs`, `apps/desktop/src-tauri/tests/hooks_commands.rs`).
-- [x] Performance targets in section 1 are met, measured with the synthetic fixture below (20 sessions). See the caveats under the table. Still worth a look with real sessions.
+- [ ] Performance targets in section 1 are met. **Partly shown; needs a human to confirm idle CPU.** With the 20-session synthetic fixture below:
+  - Latency, memory and the append bench are well inside their targets.
+  - Idle CPU: the app process was 0.02% in the one run nobody interacted with.
+  - App + WebKit helpers were 0.29% (quiet) to 2.52% (window in use) in steady state. Counting the `ps` children (~1.1–1.3%) as well, the quiet total is ~1.4%.
+  - In the first minute after many statuses change, the UI's 1 s ticker takes app + helpers to 2.9–7.8%.
 - [ ] The M0 human comparison rows in `docs/m0-findings.md` are filled in. **Needs a human.**
 
 ## Performance results
@@ -20,7 +24,7 @@ Setup: `scripts/perf-fixture.sh --idle <dir> 20` (20 live sessions, each with a 
 |---|---|---|
 | New session appears ≤ 2 s | 171–189 ms (4 runs) | yes |
 | Status change shows ≤ 1 s | registry `busy` → `idle`: 129–132 ms; transcript API-error line → `error`: 146–158 ms (4 runs) | yes |
-| Idle CPU < 2% (20 agents) | app process, steady state: mean 0.02% (max 0.3%) and 1.33% (max 8.8%) in two runs | yes (app process) |
+| Idle CPU < 2% (20 agents) | App process, steady state: mean 0.02% (max 0.3%) in the one uninterrupted run; 1.33% (max 8.8%) in a run where the window was used. App + WebKit helpers: 0.29% and 2.52%. Plus `ps` children ~1.1–1.3%. First minute after many status changes: app + helpers 2.9–7.8% | app process only, one clean run; not shown for the totals |
 | Memory < 300 MB (20 agents) | app process RSS ~66–69 MB; app + WebKit helpers max 193 MB | yes |
 | One appended line < 5 ms | bench mean 0.055–0.075 ms, max 0.57 ms (1,000 iterations, 2 MB transcript; 3 runs) | yes |
 
@@ -48,6 +52,7 @@ Memory: peak RSS of the app process (`/usr/bin/time -l`) is 72 MB, with a peak m
 Caveats:
 - "Idle CPU < 2%" holds for the app process, which is what Activity Monitor shows as the app. Counting the WebKit helpers and the `ps` children too, the quiet steady state is about 1.4%. It goes over 2% in the first minute after many statuses change (the cards' second counters re-render every second) and while the window is being used.
 - Someone used the app window during three of the four app runs: the hooks banner's Install was clicked (each run's `settings.json` with the hook entries appeared inside the fixture folder, not in `~/.claude`). The only run with no interaction is the 0.02% steady-state run.
+- Follow-up: the UI's 1 s `now` ticker re-renders every card each second. While any "since" label is under a minute, that repaints every card. That is the post-change idle cost above. Options: tick only the cards whose labels can change, or tick less often once every label is over a minute.
 - The fixture is synthetic. Real transcripts, subagents and hook events can cost more.
 
 ## Needs a human
